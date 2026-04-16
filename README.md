@@ -23,64 +23,56 @@ Every interactive tool auto-claims its target tab: the tab is put into a distinc
 - A Chromium-based browser (Chrome, Edge, Brave, Arc) — 116+
 - Claude Code (or any MCP-capable client)
 
-## Quickstart
+## Quickstart (users)
+
+One command — downloads the latest release, sets up a token, registers the MCP server with Claude Code, and prints the Chrome steps:
 
 ```bash
-pnpm install
-pnpm build
+curl -fsSL https://raw.githubusercontent.com/marcobazzani/BrowserUse/main/scripts/install.sh | bash
 ```
 
-### 1. Generate an auth token
+Then follow the printed instructions (load unpacked extension + paste token). Set `BROWSERUSE_REINIT=1` before the command if you want to regenerate the token.
 
-The MCP server and the extension need a shared secret so only your extension can drive the bridge. Generate one in the same terminal you'll start `claude` in:
+**Windows:** use WSL for the installer, or do it by hand — download the latest `browseruse-extension-*.zip` + `browseruse-mcp-server-*.tgz` from [Releases](https://github.com/marcobazzani/BrowserUse/releases), unpack to `%USERPROFILE%\.browseruse\`, then follow the [manual Claude Code registration](#register-with-claude-code-manually) below.
+
+**Uninstall:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/marcobazzani/BrowserUse/main/scripts/uninstall.sh | bash
+```
+
+## Quickstart (contributors / from source)
 
 ```bash
+git clone https://github.com/marcobazzani/BrowserUse && cd BrowserUse
+pnpm install && pnpm build
 export BROWSERUSE_TOKEN=$(openssl rand -hex 24)
-echo "$BROWSERUSE_TOKEN"
-```
-
-Keep the printed value handy — you'll paste it into the extension popup in step 4. The `export` lets Claude Code inherit it when it spawns the MCP server.
-
-> On Windows PowerShell:
-> ```powershell
-> $env:BROWSERUSE_TOKEN = -join ((1..24) | ForEach-Object { "{0:x2}" -f (Get-Random -Max 256) })
-> echo $env:BROWSERUSE_TOKEN
-> ```
-
-### 2. Register the MCP server with Claude Code
-
-```bash
 claude mcp add browseruse --scope user \
   --env "BROWSERUSE_TOKEN=$BROWSERUSE_TOKEN" \
-  -- node /ABSOLUTE/PATH/TO/BrowserUse/packages/mcp-server/dist/index.js
+  -- node "$(pwd)/packages/mcp-server/dist/index.js"
 ```
 
-Confirm it registered:
+Load unpacked from `packages/extension/dist`, paste `$BROWSERUSE_TOKEN` into the popup, Save.
 
-```bash
-claude mcp list
+### Register with Claude Code manually
+
+If the installer can't call `claude` (e.g. `claude` isn't on PATH), add this to `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "browseruse": {
+      "command": "node",
+      "args": ["/absolute/path/to/mcp-server/dist/index.js"],
+      "env": { "BROWSERUSE_TOKEN": "<your-token>" }
+    }
+  }
+}
 ```
 
-### 3. Install the extension
-
-1. Open `chrome://extensions`.
-2. Enable **Developer mode** (top-right toggle).
-3. Click **Load unpacked** and select `packages/extension/dist`.
-4. Pin the toolbar icon: click the puzzle-piece icon in Chrome's toolbar → pin **BrowserUse**.
-
-### 4. Paste the token into the popup
-
-1. Click the BrowserUse toolbar icon to open the popup.
-2. Paste the `BROWSERUSE_TOKEN` value from step 1 into the input field.
-3. Click **Save**. The popup says `Status: closed` (server isn't running yet) — that's correct.
-
-### 5. Run
-
-```bash
-claude
-```
-
-Re-open the popup — status should now say `authed`. Try: *"Open https://example.com in a new tab and tell me the page title."* The new tab joins the orange "Claude" tab group and shows the amber pulsing border while the agent works.
+> **Developer note:** opt in to the pre-commit unit-test hook with:
+> ```bash
+> git config core.hooksPath .githooks
+> ```
 
 ## Testing
 

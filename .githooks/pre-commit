@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Run unit tests before every commit. Bypass with --no-verify in emergencies.
+exec pnpm -r test:unit
