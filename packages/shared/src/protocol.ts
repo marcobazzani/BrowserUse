@@ -126,6 +126,49 @@ export const PageScrollParamsSchema = z
   });
 export const PageScrollResultSchema = z.object({ ok: z.literal(true) }).strict();
 
+export const PageEvalJsParamsSchema = z.object({
+  tabId: z.number().int(),
+  expression: z.string().min(1),
+  awaitPromise: z.boolean().default(true),
+  returnByValue: z.boolean().default(true),
+  timeoutMs: z.number().int().positive().max(30_000).default(5_000),
+}).strict();
+export const PageEvalJsResultSchema = z.object({
+  type: z.string(),           // "string" | "number" | "object" | "undefined" | "exception" | ...
+  value: z.unknown().optional(),
+  description: z.string().optional(),
+  exception: z.string().optional(),
+}).strict();
+
+export const ConsoleEntrySchema = z.object({
+  ts: z.number(),             // epoch ms
+  level: z.enum(["log", "info", "warn", "error", "debug"]),
+  text: z.string(),
+}).strict();
+export const ConsoleReadParamsSchema = z.object({
+  tabId: z.number().int(),
+  pattern: z.string().optional(),       // regex source; match against `text`
+  since: z.number().optional(),         // epoch ms; return entries newer than this
+  limit: z.number().int().positive().max(2000).default(500),
+}).strict();
+export const ConsoleReadResultSchema = z.array(ConsoleEntrySchema);
+
+export const NetworkEntrySchema = z.object({
+  ts: z.number(),
+  method: z.string(),
+  url: z.string(),
+  status: z.number().int().optional(),
+  durationMs: z.number().optional(),
+  type: z.string(),
+}).strict();
+export const NetworkReadParamsSchema = z.object({
+  tabId: z.number().int(),
+  pattern: z.string().optional(),
+  since: z.number().optional(),
+  limit: z.number().int().positive().max(2000).default(500),
+}).strict();
+export const NetworkReadResultSchema = z.array(NetworkEntrySchema);
+
 /** Every method the extension must implement. */
 export const METHODS = {
   "tabs.list":     { params: TabsListParamsSchema,     result: TabsListResultSchema },
@@ -140,6 +183,9 @@ export const METHODS = {
   "page.click":      { params: PageClickParamsSchema,      result: PageClickResultSchema },
   "page.type":       { params: PageTypeParamsSchema,       result: PageTypeResultSchema },
   "page.scroll":     { params: PageScrollParamsSchema,     result: PageScrollResultSchema },
+  "page.evalJs":     { params: PageEvalJsParamsSchema,     result: PageEvalJsResultSchema },
+  "console.read":    { params: ConsoleReadParamsSchema,    result: ConsoleReadResultSchema },
+  "network.read":    { params: NetworkReadParamsSchema,    result: NetworkReadResultSchema },
 } as const;
 export type MethodName = keyof typeof METHODS;
 

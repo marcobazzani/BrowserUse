@@ -12,6 +12,11 @@ import {
   PageClickParamsSchema,
   PageTypeParamsSchema,
   PageScrollParamsSchema,
+  PageEvalJsParamsSchema,
+  ConsoleReadParamsSchema,
+  ConsoleReadResultSchema,
+  NetworkReadParamsSchema,
+  NetworkReadResultSchema,
 } from "../src/protocol.js";
 
 describe("protocol round-trip", () => {
@@ -124,5 +129,34 @@ describe("protocol round-trip", () => {
   it("page.scroll accepts {to: 'bottom'}", () => {
     const p = PageScrollParamsSchema.parse({ tabId: 1, to: "bottom" });
     expect(p.to).toBe("bottom");
+  });
+
+  it("page.evalJs defaults awaitPromise=true, returnByValue=true, timeoutMs=5000", () => {
+    const p = PageEvalJsParamsSchema.parse({ tabId: 1, expression: "1+1" });
+    expect(p.awaitPromise).toBe(true);
+    expect(p.returnByValue).toBe(true);
+    expect(p.timeoutMs).toBe(5_000);
+  });
+  it("page.evalJs rejects empty expression", () => {
+    expect(() => PageEvalJsParamsSchema.parse({ tabId: 1, expression: "" })).toThrow();
+  });
+  it("page.evalJs rejects timeoutMs over 30000", () => {
+    expect(() => PageEvalJsParamsSchema.parse({ tabId: 1, expression: "1", timeoutMs: 99999 })).toThrow();
+  });
+
+  it("console.read defaults limit=500", () => {
+    expect(ConsoleReadParamsSchema.parse({ tabId: 1 }).limit).toBe(500);
+  });
+  it("console.read rejects limit over 2000", () => {
+    expect(() => ConsoleReadParamsSchema.parse({ tabId: 1, limit: 9999 })).toThrow();
+  });
+  it("console.read result accepts array of entries", () => {
+    const r = [{ ts: 1, level: "error" as const, text: "boom" }];
+    expect(ConsoleReadResultSchema.parse(r)).toEqual(r);
+  });
+
+  it("network.read accepts optional status and durationMs", () => {
+    const r = [{ ts: 1, method: "GET", url: "https://a", type: "Document" }];
+    expect(NetworkReadResultSchema.parse(r)).toEqual(r);
   });
 });
