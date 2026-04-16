@@ -55,6 +55,12 @@ export class DebuggerManager {
     chrome.debugger.onEvent.addListener((src, method, params) =>
       this.onEvent(src, method, params as Record<string, unknown>)
     );
+    chrome.debugger.onDetach.addListener((source) => {
+      if (source.tabId !== undefined) {
+        this.attached.delete(source.tabId);
+        // Keep buffers — user may still want to read history post-detach; next attach resets them.
+      }
+    });
   }
 
   async attach(tabId: number): Promise<void> {
@@ -77,7 +83,16 @@ export class DebuggerManager {
 
   async sendCommand<T = unknown>(tabId: number, method: string, params: unknown): Promise<T> {
     await this.attach(tabId);
-    return (await chrome.debugger.sendCommand({ tabId }, method, params as object)) as T;
+    try {
+      return (await chrome.debugger.sendCommand({ tabId }, method, params as object)) as T;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/not attached/i.test(msg)) throw e;
+      // Chrome detached us (navigation, reload). Clear state and retry once.
+      this.attached.delete(tabId);
+      await this.attach(tabId);
+      return (await chrome.debugger.sendCommand({ tabId }, method, params as object)) as T;
+    }
   }
 
   readConsole(tabId: number, pattern?: string, since?: number, limit = 500): ConsoleEntry[] {
@@ -104,7 +119,7 @@ export class DebuggerManager {
     if (method === "Runtime.consoleAPICalled" && consoleBuf) {
       const level = ((params.type as string) ?? "log") as ConsoleEntry["level"];
       const args = (params.args ?? []) as Array<{ value?: unknown; description?: string }>;
-      const text = args.map((a) => String(a.value ?? a.description ?? "")).join(" ");
+      const text = args.map((a) => String(a.value ?? a.description ?? "")).join(" ").slice(0, 2000);
       consoleBuf.push({ ts: Date.now(), level, text });
     } else if (method === "Runtime.exceptionThrown" && consoleBuf) {
       const text = ((params.exceptionDetails as Record<string, unknown> | undefined)?.text as string) ?? "exception";

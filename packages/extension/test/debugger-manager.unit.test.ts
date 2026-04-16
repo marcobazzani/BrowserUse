@@ -6,6 +6,7 @@ beforeEach(() => {
     tabs: { onRemoved: { addListener: vi.fn() } },
     debugger: {
       onEvent: { addListener: vi.fn() },
+      onDetach: { addListener: vi.fn() },
       attach: vi.fn(async () => {}),
       detach: vi.fn(async () => {}),
       sendCommand: vi.fn(async () => ({})),
@@ -125,5 +126,55 @@ describe("DebuggerManager.onEvent", () => {
     const filtered = m.readNetwork(1, "a\\.test");
     expect(filtered).toHaveLength(1);
     expect(filtered[0]!.url).toBe("https://a.test/x");
+  });
+});
+
+describe("DebuggerManager.onDetach", () => {
+  it("onDetach removes the tab from the attached set", async () => {
+    const m = new DebuggerManager();
+    await m.attach(1);
+    // Grab the onDetach callback the constructor registered.
+    const addListener = (globalThis as any).chrome.debugger.onDetach.addListener as ReturnType<typeof vi.fn>;
+    const [cb] = addListener.mock.calls[0]!;
+    cb({ tabId: 1 }, "target_closed");
+    // Next sendCommand must re-attach.
+    const attachSpy = (globalThis as any).chrome.debugger.attach as ReturnType<typeof vi.fn>;
+    attachSpy.mockClear();
+    await m.sendCommand(1, "Runtime.evaluate", { expression: "1" });
+    expect(attachSpy).toHaveBeenCalledWith({ tabId: 1 }, "1.3");
+  });
+
+  it("sendCommand retries once on 'Debugger is not attached' error", async () => {
+    const m = new DebuggerManager();
+    await m.attach(1);
+    const sendSpy = (globalThis as any).chrome.debugger.sendCommand as ReturnType<typeof vi.fn>;
+    const attachSpy = (globalThis as any).chrome.debugger.attach as ReturnType<typeof vi.fn>;
+    // Make the first Runtime.evaluate call throw a not-attached error, second succeeds.
+    let evalCallCount = 0;
+    sendSpy.mockImplementation(async (_target: any, method: string) => {
+      if (method === "Runtime.evaluate") {
+        evalCallCount++;
+        if (evalCallCount === 1) throw new Error("Debugger is not attached to the tab with id: 1");
+        return { result: { type: "string", value: "ok" } };
+      }
+      return {};
+    });
+    attachSpy.mockClear();
+    const result = await m.sendCommand(1, "Runtime.evaluate", { expression: "1" });
+    expect(result).toEqual({ result: { type: "string", value: "ok" } });
+    // Should have re-attached once during retry.
+    expect(attachSpy).toHaveBeenCalledWith({ tabId: 1 }, "1.3");
+  });
+
+  it("console entry text is truncated to 2000 characters", async () => {
+    const m = new DebuggerManager();
+    await m.attach(1);
+    const longText = "x".repeat(3000);
+    m.onEvent({ tabId: 1 }, "Runtime.consoleAPICalled", {
+      type: "log",
+      args: [{ value: longText }],
+    });
+    const entries = m.readConsole(1);
+    expect(entries[0]!.text.length).toBe(2000);
   });
 });

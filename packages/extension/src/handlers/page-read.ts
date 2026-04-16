@@ -1,5 +1,6 @@
 import type { Dispatcher } from "../dispatcher.js";
 import { PageSnapshotParamsSchema, PageScreenshotParamsSchema } from "@browseruse/shared";
+import { resolveTabId } from "../lib/active-tab.js";
 
 // Runs in-page. Must be self-contained (no closures).
 function textSnapshot(maxBytes: number) {
@@ -59,9 +60,10 @@ function a11ySnapshot(maxBytes: number) {
 export function registerPageReadHandlers(d: Dispatcher) {
   d.register("page.snapshot", async (raw) => {
     const p = PageSnapshotParamsSchema.parse(raw);
+    const tabId = await resolveTabId(p.tabId);
     const fn = p.mode === "dom" ? domSnapshot : p.mode === "a11y" ? a11ySnapshot : textSnapshot;
     const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId: p.tabId },
+      target: { tabId },
       func: fn,
       args: [p.maxBytes],
     });
@@ -70,9 +72,12 @@ export function registerPageReadHandlers(d: Dispatcher) {
 
   d.register("page.screenshot", async (raw) => {
     const p = PageScreenshotParamsSchema.parse(raw);
-    const tab = await chrome.tabs.get(p.tabId);
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId!, { format: p.format });
-    // dataUrl is "data:image/png;base64,XXXX" — strip prefix.
+    const tabId = await resolveTabId(p.tabId);
+    const tab = await chrome.tabs.get(tabId);
+    const opts: chrome.tabs.CaptureVisibleTabOptions =
+      p.format === "jpeg" ? { format: "jpeg", quality: p.quality } : { format: "png" };
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId!, opts);
+    // dataUrl is "data:image/jpeg;base64,XXXX" — strip prefix.
     const comma = dataUrl.indexOf(",");
     const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
     return { format: p.format, base64 };

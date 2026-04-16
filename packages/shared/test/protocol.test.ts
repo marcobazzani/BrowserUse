@@ -88,14 +88,41 @@ describe("protocol round-trip", () => {
     ).toThrow();
   });
 
-  it("page.snapshot params default mode=text and maxBytes=500000", () => {
+  it("page.snapshot params default mode=text and maxBytes=80000", () => {
     const parsed = PageSnapshotParamsSchema.parse({ tabId: 1 });
     expect(parsed.mode).toBe("text");
-    expect(parsed.maxBytes).toBe(500_000);
+    expect(parsed.maxBytes).toBe(80_000);
   });
 
-  it("page.screenshot params default format=png", () => {
-    expect(PageScreenshotParamsSchema.parse({ tabId: 1 }).format).toBe("png");
+  it("page.snapshot params accept no tabId (active-tab fallback)", () => {
+    const parsed = PageSnapshotParamsSchema.parse({});
+    expect(parsed.tabId).toBeUndefined();
+  });
+
+  it("page.screenshot params default format=jpeg and quality=60", () => {
+    const parsed = PageScreenshotParamsSchema.parse({ tabId: 1 });
+    expect(parsed.format).toBe("jpeg");
+    expect(parsed.quality).toBe(60);
+  });
+
+  it("page.screenshot params accept no tabId (active-tab fallback)", () => {
+    const parsed = PageScreenshotParamsSchema.parse({});
+    expect(parsed.tabId).toBeUndefined();
+  });
+
+  it("page.evalJs accepts no tabId (active-tab fallback)", () => {
+    const parsed = PageEvalJsParamsSchema.parse({ expression: "1+1" });
+    expect(parsed.tabId).toBeUndefined();
+  });
+
+  it("console.read accepts no tabId (active-tab fallback)", () => {
+    const parsed = ConsoleReadParamsSchema.parse({});
+    expect(parsed.tabId).toBeUndefined();
+  });
+
+  it("network.read accepts no tabId (active-tab fallback)", () => {
+    const parsed = NetworkReadParamsSchema.parse({});
+    expect(parsed.tabId).toBeUndefined();
   });
 
   it("page.snapshot rejects mode outside enum", () => {
@@ -132,7 +159,7 @@ describe("protocol round-trip", () => {
   });
 
   it("page.evalJs defaults awaitPromise=true, returnByValue=true, timeoutMs=5000", () => {
-    const p = PageEvalJsParamsSchema.parse({ tabId: 1, expression: "1+1" });
+    const p = PageEvalJsParamsSchema.parse({ tabId: 1, expression: "1+1" });  // tabId explicit
     expect(p.awaitPromise).toBe(true);
     expect(p.returnByValue).toBe(true);
     expect(p.timeoutMs).toBe(5_000);

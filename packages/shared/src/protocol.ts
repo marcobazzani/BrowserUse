@@ -60,9 +60,9 @@ export const SessionReleaseResultSchema = z.object({ ok: z.literal(true) }).stri
 
 export const PageSnapshotParamsSchema = z
   .object({
-    tabId: z.number().int(),
+    tabId: z.number().int().optional(),   // omit to target the active tab
     mode: z.enum(["text", "dom", "a11y"]).default("text"),
-    maxBytes: z.number().int().positive().max(2_000_000).default(500_000),
+    maxBytes: z.number().int().positive().max(2_000_000).default(80_000),
   })
   .strict();
 export const PageSnapshotResultSchema = z
@@ -76,7 +76,11 @@ export const PageSnapshotResultSchema = z
   .strict();
 
 export const PageScreenshotParamsSchema = z
-  .object({ tabId: z.number().int(), format: z.enum(["png", "jpeg"]).default("png") })
+  .object({
+    tabId: z.number().int().optional(),   // omit to target the active tab
+    format: z.enum(["png", "jpeg"]).default("jpeg"),
+    quality: z.number().int().min(1).max(100).default(60),   // jpeg only
+  })
   .strict();
 export const PageScreenshotResultSchema = z
   .object({ format: z.enum(["png", "jpeg"]), base64: z.string() })
@@ -127,7 +131,7 @@ export const PageScrollParamsSchema = z
 export const PageScrollResultSchema = z.object({ ok: z.literal(true) }).strict();
 
 export const PageEvalJsParamsSchema = z.object({
-  tabId: z.number().int(),
+  tabId: z.number().int().optional(),   // omit to target the active tab
   expression: z.string().min(1),
   awaitPromise: z.boolean().default(true),
   returnByValue: z.boolean().default(true),
@@ -146,7 +150,7 @@ export const ConsoleEntrySchema = z.object({
   text: z.string(),
 }).strict();
 export const ConsoleReadParamsSchema = z.object({
-  tabId: z.number().int(),
+  tabId: z.number().int().optional(),   // omit to target the active tab
   pattern: z.string().optional(),       // regex source; match against `text`
   since: z.number().optional(),         // epoch ms; return entries newer than this
   limit: z.number().int().positive().max(2000).default(500),
@@ -162,7 +166,7 @@ export const NetworkEntrySchema = z.object({
   type: z.string(),
 }).strict();
 export const NetworkReadParamsSchema = z.object({
-  tabId: z.number().int(),
+  tabId: z.number().int().optional(),   // omit to target the active tab
   pattern: z.string().optional(),
   since: z.number().optional(),
   limit: z.number().int().positive().max(2000).default(500),

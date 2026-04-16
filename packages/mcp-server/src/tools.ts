@@ -77,24 +77,24 @@ export function buildTools(bridge: BridgeServer) {
 
   const page_snapshot: Tool<z.infer<typeof PageSnapshotParamsSchema>> = {
     description:
-      "Read the page content of a tab. mode=text returns innerText (default). mode=dom returns outerHTML. mode=a11y returns a flattened accessibility tree.",
+      "Read the page content of a tab. mode=text returns innerText (default). mode=dom returns outerHTML. mode=a11y returns a flattened accessibility tree. If tabId is omitted, reads the active tab in the last-focused window.",
     inputSchema: PageSnapshotParamsSchema,
     handler: async (params) => {
       guard(bridge);
       const parsed = PageSnapshotParamsSchema.parse(params);
-      await ensureClaim(parsed.tabId);
+      if (parsed.tabId !== undefined) await ensureClaim(parsed.tabId);
       return text(await bridge.call("page.snapshot", parsed));
     },
   };
 
   const page_screenshot: Tool<z.infer<typeof PageScreenshotParamsSchema>> = {
     description:
-      "Capture a screenshot of the visible area of a tab as a base64-encoded image.",
+      "Capture a screenshot of the visible area of a tab as a base64-encoded image. If tabId is omitted, reads the active tab in the last-focused window.",
     inputSchema: PageScreenshotParamsSchema,
     handler: async (params) => {
       guard(bridge);
       const parsed = PageScreenshotParamsSchema.parse(params);
-      await ensureClaim(parsed.tabId);
+      if (parsed.tabId !== undefined) await ensureClaim(parsed.tabId);
       return text(await bridge.call("page.screenshot", parsed));
     },
   };
@@ -160,18 +160,18 @@ export function buildTools(bridge: BridgeServer) {
   };
 
   const page_eval_js: Tool<z.infer<typeof PageEvalJsParamsSchema>> = {
-    description: "Evaluate a JavaScript expression in a tab's context. Auto-claims the tab. DANGEROUS: runs with full page privileges.",
+    description: "Evaluate a JavaScript expression in a tab's context. Auto-claims the tab. DANGEROUS: runs with full page privileges. If tabId is omitted, reads the active tab in the last-focused window.",
     inputSchema: PageEvalJsParamsSchema,
     handler: async (params) => {
       guard(bridge);
       const parsed = PageEvalJsParamsSchema.parse(params);
-      await ensureClaim(parsed.tabId);
+      if (parsed.tabId !== undefined) await ensureClaim(parsed.tabId);
       return text(await bridge.call("page.evalJs", parsed));
     },
   };
 
   const console_read: Tool<z.infer<typeof ConsoleReadParamsSchema>> = {
-    description: "Read buffered console messages for a tab. Observational — does not claim the tab.",
+    description: "Read buffered console messages for a tab. Observational — does not claim the tab. If tabId is omitted, reads from the active tab.",
     inputSchema: ConsoleReadParamsSchema,
     handler: async (params) => {
       guard(bridge);
@@ -180,7 +180,7 @@ export function buildTools(bridge: BridgeServer) {
   };
 
   const network_read: Tool<z.infer<typeof NetworkReadParamsSchema>> = {
-    description: "Read buffered network requests for a tab. Observational — does not claim the tab.",
+    description: "Read buffered network requests for a tab. Observational — does not claim the tab. If tabId is omitted, reads from the active tab.",
     inputSchema: NetworkReadParamsSchema,
     handler: async (params) => {
       guard(bridge);

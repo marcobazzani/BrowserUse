@@ -1,5 +1,6 @@
 import type { Dispatcher } from "../dispatcher.js";
 import { DebuggerManager } from "../lib/debugger-manager.js";
+import { resolveTabId } from "../lib/active-tab.js";
 import {
   PageEvalJsParamsSchema,
   ConsoleReadParamsSchema,
@@ -17,7 +18,8 @@ type RuntimeEvaluateResult = {
 export function registerDebugHandlers(d: Dispatcher) {
   d.register("page.evalJs", async (raw) => {
     const p = PageEvalJsParamsSchema.parse(raw);
-    const r = await mgr.sendCommand<RuntimeEvaluateResult>(p.tabId, "Runtime.evaluate", {
+    const tabId = await resolveTabId(p.tabId);
+    const r = await mgr.sendCommand<RuntimeEvaluateResult>(tabId, "Runtime.evaluate", {
       expression: p.expression,
       awaitPromise: p.awaitPromise,
       returnByValue: p.returnByValue,
@@ -35,14 +37,16 @@ export function registerDebugHandlers(d: Dispatcher) {
 
   d.register("console.read", async (raw) => {
     const p = ConsoleReadParamsSchema.parse(raw);
-    await mgr.attach(p.tabId); // idempotent — ensures a buffer exists even before any event fires
-    return mgr.readConsole(p.tabId, p.pattern, p.since, p.limit);
+    const tabId = await resolveTabId(p.tabId);
+    await mgr.attach(tabId); // idempotent — ensures a buffer exists even before any event fires
+    return mgr.readConsole(tabId, p.pattern, p.since, p.limit);
   });
 
   d.register("network.read", async (raw) => {
     const p = NetworkReadParamsSchema.parse(raw);
-    await mgr.attach(p.tabId);
-    return mgr.readNetwork(p.tabId, p.pattern, p.since, p.limit);
+    const tabId = await resolveTabId(p.tabId);
+    await mgr.attach(tabId);
+    return mgr.readNetwork(tabId, p.pattern, p.since, p.limit);
   });
 }
 

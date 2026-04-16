@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const _chromeStub = vi.hoisted(() => {
   (globalThis as any).chrome = {
     tabs: { onRemoved: { addListener: () => {} } },
-    debugger: { onEvent: { addListener: () => {} } },
+    debugger: {
+      onEvent: { addListener: () => {} },
+      onDetach: { addListener: () => {} },
+    },
   };
   return null;
 });
@@ -22,7 +25,10 @@ function fakeChrome() {
   };
   (globalThis as any).chrome = {
     tabs: {
-      query: vi.fn(async () => state.tabs),
+      query: vi.fn(async (q: { active?: boolean; lastFocusedWindow?: boolean }) => {
+        if (q.active && q.lastFocusedWindow) return [{ id: 99, url: "https://active", title: "active", active: true, windowId: 1 }];
+        return state.tabs;
+      }),
       create: vi.fn(async ({ url }: { url: string }) => {
         const t = { id: state.tabs.length + 1, url, title: "", active: true, windowId: 1 };
         state.tabs.push(t);
@@ -79,6 +85,7 @@ function fakeChrome() {
         return {};
       }),
       onEvent: { addListener: vi.fn() },
+      onDetach: { addListener: vi.fn() },
     },
   };
   return state;
@@ -142,7 +149,13 @@ describe("handlers", () => {
   it("page.screenshot strips the data URL prefix and returns base64", async () => {
     const resp = await d.handle({ jsonrpc: "2.0", id: 21, method: "page.screenshot", params: { tabId: 1 } });
     expect((resp.result as any).base64).toBe("AAAA");
-    expect((resp.result as any).format).toBe("png");
+    expect((resp.result as any).format).toBe("jpeg");
+  });
+
+  it("page.snapshot with no tabId resolves to the active tab's id", async () => {
+    const resp = await d.handle({ jsonrpc: "2.0", id: 60, method: "page.snapshot", params: {} });
+    // snapshot result is whatever the executeScript mock returns; just assert it didn't error.
+    expect(resp.error).toBeUndefined();
   });
 
   it("page.click dispatches executeScript with the click helper and returns ok", async () => {
