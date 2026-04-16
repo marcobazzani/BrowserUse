@@ -1,0 +1,4 @@
+body { font: 13px/1.4 system-ui, sans-serif; width: 280px; padding: 12px; margin: 0; }
+h1 { font-size: 14px; margin: 0 0 8px; }
+input, button { width: 100%; margin: 4px 0; padding: 6px; box-sizing: border-box; }
+button { background: #FF8C00; color: white; border: 0; border-radius: 4px; cursor: pointer; }
