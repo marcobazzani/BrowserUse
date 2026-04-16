@@ -3,6 +3,7 @@ import { registerTabHandlers } from "./tabs.js";
 import { registerPageHandlers } from "./page.js";
 import { registerPageReadHandlers } from "./page-read.js";
 import { registerPageInteractHandlers } from "./page-interact.js";
+import { registerDebugHandlers } from "./debug.js";
 import { registerSessionHandlers } from "./session.js";
 
 export function registerHandlers(d: Dispatcher) {
@@ -10,5 +11,6 @@ export function registerHandlers(d: Dispatcher) {
   registerPageHandlers(d);
   registerPageReadHandlers(d);
   registerPageInteractHandlers(d);
+  registerDebugHandlers(d);
   registerSessionHandlers(d);
 }

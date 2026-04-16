@@ -1,4 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// vi.hoisted runs before module imports — ensures chrome exists when DebuggerManager
+// is constructed at module evaluation time inside debug.ts.
+const _chromeStub = vi.hoisted(() => {
+  (globalThis as any).chrome = {
+    tabs: { onRemoved: { addListener: () => {} } },
+    debugger: { onEvent: { addListener: () => {} } },
+  };
+  return null;
+});
+
 import { registerHandlers } from "../src/handlers/index.js";
 import { Dispatcher } from "../src/dispatcher.js";
 
@@ -7,6 +18,7 @@ function fakeChrome() {
     tabs: [{ id: 1, url: "https://a", title: "a", active: true, windowId: 1 }] as any[],
     groups: new Map<number, { title?: string; color?: string; tabs: number[] }>(),
     nextGroupId: 100,
+    debuggerState: { attached: new Set<number>(), lastCommand: undefined as any },
   };
   (globalThis as any).chrome = {
     tabs: {
@@ -21,6 +33,7 @@ function fakeChrome() {
       get: vi.fn(async (id: number) => state.tabs.find((t) => t.id === id)),
       captureVisibleTab: vi.fn(async (_winId: number, opts: { format: string }) => `data:image/${opts.format};base64,AAAA`),
       onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
+      onRemoved: { addListener: vi.fn() },
       group: vi.fn(async ({ tabIds, groupId }: { tabIds: number[]; groupId?: number }) => {
         if (groupId !== undefined && state.groups.has(groupId)) {
           const g = state.groups.get(groupId)!;
@@ -50,6 +63,18 @@ function fakeChrome() {
           truncated: false,
         },
       }]),
+    },
+    debugger: {
+      attach: vi.fn(async ({ tabId }: { tabId: number }) => { state.debuggerState.attached.add(tabId); }),
+      detach: vi.fn(async ({ tabId }: { tabId: number }) => { state.debuggerState.attached.delete(tabId); }),
+      sendCommand: vi.fn(async (_target: any, method: string, params: any) => {
+        state.debuggerState.lastCommand = { method, params };
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "string", value: "ok" } };
+        }
+        return {};
+      }),
+      onEvent: { addListener: vi.fn() },
     },
   };
   return state;
@@ -166,5 +191,50 @@ describe("handlers", () => {
       params: { tabId: 1, dy: 100, selector: "#x" },
     });
     expect(resp.error?.message).toMatch(/exactly one/i);
+  });
+
+  it("page.evalJs forwards to Runtime.evaluate with the expected params", async () => {
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 40, method: "page.evalJs",
+      params: { tabId: 1, expression: "document.title" },
+    });
+    const cmd = (globalThis as any).chrome.debugger.sendCommand.mock.calls
+      .find((c: any[]) => c[1] === "Runtime.evaluate");
+    expect(cmd).toBeDefined();
+    expect(cmd[2].expression).toBe("document.title");
+    expect((resp.result as any).type).toBe("string");
+  });
+
+  it("page.evalJs returns {type:'exception', exception} on exceptionDetails", async () => {
+    const spy = (globalThis as any).chrome.debugger.sendCommand as ReturnType<typeof vi.fn>;
+    // Make the NEXT Runtime.evaluate call return an exception
+    spy.mockImplementationOnce(async () => ({
+      result: { type: "object" },
+      exceptionDetails: { text: "Uncaught ReferenceError" },
+    }));
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 41, method: "page.evalJs",
+      params: { tabId: 1, expression: "nope()" },
+    });
+    expect((resp.result as any).type).toBe("exception");
+    expect((resp.result as any).exception).toMatch(/ReferenceError/);
+  });
+
+  it("console.read triggers attach and returns an empty array for a fresh tab", async () => {
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 42, method: "console.read",
+      params: { tabId: 2 },
+    });
+    expect(Array.isArray(resp.result)).toBe(true);
+    expect((resp.result as any[]).length).toBe(0);
+    expect((globalThis as any).chrome.debugger.attach).toHaveBeenCalled();
+  });
+
+  it("network.read triggers attach and returns an empty array for a fresh tab", async () => {
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 43, method: "network.read",
+      params: { tabId: 3 },
+    });
+    expect(Array.isArray(resp.result)).toBe(true);
   });
 });
