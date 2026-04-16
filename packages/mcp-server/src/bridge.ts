@@ -121,6 +121,11 @@ export class BridgeServer {
         this.authed = ws;
         return;
       }
+      // Keepalive frame from the extension — ignore. Receiving any frame resets
+      // Chrome's SW idle timer on the extension side.
+      if (typeof parsed === "object" && parsed !== null && (parsed as { type?: unknown }).type === "ping") {
+        return;
+      }
       // After auth: incoming frames are responses to our requests.
       const resp = RpcResponseSchema.safeParse(parsed);
       if (resp.success) this.corr.resolve(resp.data);

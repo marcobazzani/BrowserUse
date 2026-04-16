@@ -3,7 +3,7 @@
   "name": "BrowserUse",
   "version": "0.1.0",
   "description": "Lets a local MCP server drive this Chrome. Show orange Claude group + border when active.",
-  "permissions": ["tabs", "tabGroups", "scripting", "debugger", "storage", "activeTab"],
+  "permissions": ["tabs", "tabGroups", "scripting", "debugger", "storage", "activeTab", "alarms"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "src/background.ts", "type": "module" },
   "action": { "default_popup": "src/popup/index.html", "default_icon": "icons/icon-128.png" },

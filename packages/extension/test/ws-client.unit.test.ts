@@ -15,6 +15,7 @@ describe("WsClient reconnect timer hygiene", () => {
   const sockets: FakeWebSocket[] = [];
 
   class FakeWebSocket {
+    static OPEN = 1;
     readyState = 0;
     listeners: Record<string, ((ev: any) => void)[]> = {};
     sent: string[] = [];
@@ -40,6 +41,20 @@ describe("WsClient reconnect timer hygiene", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it("ping() sends a {type:'ping'} frame when the socket is OPEN", async () => {
+    const client = new WsClient(
+      { url: "ws://127.0.0.1:0", getToken: async () => "tokentoken", onStatus: () => {} },
+      new Dispatcher()
+    );
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const ws = sockets[0]!;
+    ws.readyState = 1; // OPEN
+    ws.dispatch("open", {});
+    client.ping();
+    expect(ws.sent).toContainEqual(JSON.stringify({ type: "ping" }));
   });
 
   it("does not open a second socket when start() is called while a reconnect is pending", async () => {

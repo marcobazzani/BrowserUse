@@ -6,7 +6,7 @@ export function nextBackoffMs(attempt: number): number {
 }
 
 export interface WsClientOptions {
-  url: string;
+  url: string | (() => Promise<string>);
   getToken: () => Promise<string | null>;
   onStatus: (status: "connecting" | "open" | "authed" | "closed" | "badToken") => void;
 }
@@ -26,6 +26,12 @@ export class WsClient {
     }
     this.closedByUs = false;
     this.connect();
+  }
+
+  ping(): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      try { this.ws.send(JSON.stringify({ type: "ping" })); } catch { /* ignore */ }
+    }
   }
 
   stop() {
@@ -52,7 +58,8 @@ export class WsClient {
       try { stale.close(); } catch { /* ignore */ }
     }
     this.opts.onStatus("connecting");
-    const ws = new WebSocket(this.opts.url);
+    const url = typeof this.opts.url === "function" ? await this.opts.url() : this.opts.url;
+    const ws = new WebSocket(url);
     this.ws = ws;
     // All listeners capture `ws` locally so a late `open` event from a stale
     // socket can't send on the replacement socket (which may still be CONNECTING).
