@@ -20,6 +20,9 @@ const fakeBridge = () => {
         if (method === "page.click")      return { ok: true };
         if (method === "page.type")       return { ok: true };
         if (method === "page.scroll")     return { ok: true };
+        if (method === "page.evalJs")    return { type: "string", value: "hi" };
+        if (method === "console.read")   return [{ ts: 1, level: "error", text: "boom" }];
+        if (method === "network.read")   return [{ ts: 1, method: "GET", url: "https://a", type: "Document", status: 200, durationMs: 12 }];
         throw new Error("unexpected method " + method);
       }),
       isConnected: () => true,
@@ -146,5 +149,35 @@ describe("tool adapters", () => {
     const { bridge } = fakeBridge();
     const tools = buildTools(bridge);
     await expect(tools.page_scroll.handler({ tabId: 7 } as any)).rejects.toThrow();
+  });
+
+  it("page_eval_js auto-claims and forwards the expression", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_eval_js.handler({ tabId: 7, expression: "1+1" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.evalJs"]);
+    expect((calls[1]!.params as any).expression).toBe("1+1");
+  });
+
+  it("console_read does NOT auto-claim", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.console_read.handler({ tabId: 7 });
+    expect(calls.map(c => c.method)).toEqual(["console.read"]);
+  });
+
+  it("network_read does NOT auto-claim", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.network_read.handler({ tabId: 7 });
+    expect(calls.map(c => c.method)).toEqual(["network.read"]);
+  });
+
+  it("console_read returns an array of entries in the text content block", async () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    const result = await tools.console_read.handler({ tabId: 7 });
+    const parsed = JSON.parse((result.content[0] as any).text);
+    expect(parsed).toEqual([{ ts: 1, level: "error", text: "boom" }]);
   });
 });

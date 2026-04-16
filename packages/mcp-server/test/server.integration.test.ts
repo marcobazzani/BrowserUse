@@ -30,6 +30,9 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
         "page.scroll": { ok: true },
         "session.claim": { ok: true, groupId: 5 },
         "session.release": { ok: true },
+        "page.evalJs":   { type: "string", value: "hi" },
+        "console.read":  [{ ts: 1, level: "error", text: "boom" }],
+        "network.read":  [{ ts: 1, method: "GET", url: "https://a", type: "Document", status: 200, durationMs: 12 }],
       };
       ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: responders[req.method] }));
     });
@@ -77,6 +80,14 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
     const tools = buildTools(server);
     await tools.page_click.handler({ tabId: 1, selector: "#go" });
     expect(seen).toEqual(["session.claim", "page.click"]);
+  });
+
+  it("console_read round-trips an array through the real bridge", async () => {
+    const tools = buildTools(server);
+    const result = await tools.console_read.handler({ tabId: 1 });
+    const parsed = JSON.parse((result.content[0] as any).text);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed[0].level).toBe("error");
   });
 
   it("page_navigate auto-claims via session.claim then navigates", async () => {

@@ -11,6 +11,9 @@ import {
   PageTypeParamsSchema,
   PageScrollParamsSchema,
   SessionReleaseParamsSchema,
+  PageEvalJsParamsSchema,
+  ConsoleReadParamsSchema,
+  NetworkReadParamsSchema,
 } from "@browseruse/shared";
 import type { BridgeServer } from "./bridge.js";
 
@@ -156,10 +159,40 @@ export function buildTools(bridge: BridgeServer) {
     },
   };
 
+  const page_eval_js: Tool<z.infer<typeof PageEvalJsParamsSchema>> = {
+    description: "Evaluate a JavaScript expression in a tab's context. Auto-claims the tab. DANGEROUS: runs with full page privileges.",
+    inputSchema: PageEvalJsParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageEvalJsParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.evalJs", parsed));
+    },
+  };
+
+  const console_read: Tool<z.infer<typeof ConsoleReadParamsSchema>> = {
+    description: "Read buffered console messages for a tab. Observational — does not claim the tab.",
+    inputSchema: ConsoleReadParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      return text(await bridge.call("console.read", ConsoleReadParamsSchema.parse(params)));
+    },
+  };
+
+  const network_read: Tool<z.infer<typeof NetworkReadParamsSchema>> = {
+    description: "Read buffered network requests for a tab. Observational — does not claim the tab.",
+    inputSchema: NetworkReadParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      return text(await bridge.call("network.read", NetworkReadParamsSchema.parse(params)));
+    },
+  };
+
   return {
     tabs_list, tabs_create, tabs_close, tabs_activate,
     page_navigate, page_snapshot, page_screenshot,
     page_click, page_type, page_scroll,
     session_release,
+    page_eval_js, console_read, network_read,
   };
 }
