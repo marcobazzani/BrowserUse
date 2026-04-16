@@ -22,3 +22,11 @@ client.start();
 
 chrome.runtime.onStartup.addListener(() => client.start());
 chrome.runtime.onInstalled.addListener(() => client.start());
+
+// Restart the WS client when the popup saves a new token.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.token) {
+    client.stop();
+    client.start();
+  }
+});
