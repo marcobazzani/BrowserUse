@@ -14,8 +14,9 @@ async function main() {
   const cfg = loadConfig();
   const bridge = new BridgeServer({ token: cfg.token, timeoutMs: cfg.timeoutMs });
   await bridge.listen(cfg.port);
+  const prefix = cfg.token.slice(0, 8);
   console.error(
-    `[browseruse] listening on ws://127.0.0.1:${cfg.port}. Token (paste into extension popup): ${cfg.token}`
+    `[browseruse] listening on ws://127.0.0.1:${cfg.port}. Token prefix: ${prefix}... (full token at ${cfg.tokenFile})`
   );
 
   const tools = buildTools(bridge);

@@ -52,15 +52,22 @@ function overlayOut() {
 }
 
 async function injectOverlay(tabId: number) {
-  await chrome.scripting
-    .executeScript({ target: { tabId }, func: overlayIn })
-    .catch(() => { /* some pages (chrome://, certain CSP) block injection; acceptable */ });
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, func: overlayIn });
+    await chrome.action.setBadgeText({ tabId, text: "" });
+  } catch {
+    // Overlay couldn't inject (chrome://, Web Store, strict CSP). Fall back
+    // to a toolbar-icon badge so the user still sees that Claude is driving.
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: "#FF8C00" }).catch(() => {});
+    await chrome.action.setBadgeText({ tabId, text: "●" }).catch(() => {});
+  }
 }
 
 async function removeOverlay(tabId: number) {
   await chrome.scripting
     .executeScript({ target: { tabId }, func: overlayOut })
     .catch(() => {});
+  await chrome.action.setBadgeText({ tabId, text: "" }).catch(() => {});
 }
 
 export function registerSessionHandlers(d: Dispatcher) {

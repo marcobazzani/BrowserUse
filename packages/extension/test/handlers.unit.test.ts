@@ -64,6 +64,10 @@ function fakeChrome() {
         },
       }]),
     },
+    action: {
+      setBadgeText: vi.fn(async (_p) => {}),
+      setBadgeBackgroundColor: vi.fn(async (_p) => {}),
+    },
     debugger: {
       attach: vi.fn(async ({ tabId }: { tabId: number }) => { state.debuggerState.attached.add(tabId); }),
       detach: vi.fn(async ({ tabId }: { tabId: number }) => { state.debuggerState.attached.delete(tabId); }),
@@ -236,5 +240,16 @@ describe("handlers", () => {
       params: { tabId: 3 },
     });
     expect(Array.isArray(resp.result)).toBe(true);
+  });
+
+  it("session.claim sets the toolbar badge when overlay injection fails", async () => {
+    // Force executeScript to reject for the overlay-injection call.
+    const spy = (globalThis as any).chrome.scripting.executeScript as ReturnType<typeof vi.fn>;
+    spy.mockImplementationOnce(async () => { throw new Error("CSP blocked"); });
+
+    await d.handle({ jsonrpc: "2.0", id: 50, method: "session.claim", params: { tabId: 1 } });
+
+    const badge = (globalThis as any).chrome.action.setBadgeText as ReturnType<typeof vi.fn>;
+    expect(badge).toHaveBeenCalledWith(expect.objectContaining({ tabId: 1, text: "●" }));
   });
 });
