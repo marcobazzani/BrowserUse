@@ -9,6 +9,9 @@ import {
   PageSnapshotParamsSchema,
   PageScreenshotParamsSchema,
   SessionClaimResultSchema,
+  PageClickParamsSchema,
+  PageTypeParamsSchema,
+  PageScrollParamsSchema,
 } from "../src/protocol.js";
 
 describe("protocol round-trip", () => {
@@ -92,5 +95,34 @@ describe("protocol round-trip", () => {
 
   it("page.snapshot rejects mode outside enum", () => {
     expect(() => PageSnapshotParamsSchema.parse({ tabId: 1, mode: "xml" })).toThrow();
+  });
+
+  it("page.click rejects empty selector", () => {
+    expect(() => PageClickParamsSchema.parse({ tabId: 1, selector: "" })).toThrow();
+  });
+  it("page.click defaults button=left and scrollIntoView=true", () => {
+    const p = PageClickParamsSchema.parse({ tabId: 1, selector: "#go" });
+    expect(p.button).toBe("left");
+    expect(p.scrollIntoView).toBe(true);
+  });
+  it("page.type defaults submit=false, clear=true", () => {
+    const p = PageTypeParamsSchema.parse({ tabId: 1, selector: "#q", text: "hi" });
+    expect(p.submit).toBe(false);
+    expect(p.clear).toBe(true);
+  });
+  it("page.scroll rejects params with no scroll target", () => {
+    expect(() => PageScrollParamsSchema.parse({ tabId: 1 })).toThrow();
+  });
+  it("page.scroll rejects params that combine dy + selector", () => {
+    expect(() => PageScrollParamsSchema.parse({ tabId: 1, dy: 100, selector: "#x" })).toThrow();
+  });
+  it("page.scroll accepts a selector-only scroll", () => {
+    const p = PageScrollParamsSchema.parse({ tabId: 1, selector: "#footer" });
+    expect(p.selector).toBe("#footer");
+    expect(p.smooth).toBe(false);
+  });
+  it("page.scroll accepts {to: 'bottom'}", () => {
+    const p = PageScrollParamsSchema.parse({ tabId: 1, to: "bottom" });
+    expect(p.to).toBe("bottom");
   });
 });

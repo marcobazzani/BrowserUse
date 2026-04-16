@@ -82,6 +82,50 @@ export const PageScreenshotResultSchema = z
   .object({ format: z.enum(["png", "jpeg"]), base64: z.string() })
   .strict();
 
+export const PageClickParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    selector: z.string().min(1),
+    button: z.enum(["left", "right", "middle"]).default("left"),
+    scrollIntoView: z.boolean().default(true),
+  })
+  .strict();
+export const PageClickResultSchema = z.object({ ok: z.literal(true) }).strict();
+
+export const PageTypeParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    selector: z.string().min(1),
+    text: z.string(),
+    submit: z.boolean().default(false),
+    clear: z.boolean().default(true),
+  })
+  .strict();
+export const PageTypeResultSchema = z.object({ ok: z.literal(true) }).strict();
+
+export const PageScrollParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    // Either (dx,dy) OR selector OR "top"/"bottom" — any one of these. We validate at least one is provided via .superRefine below.
+    dx: z.number().optional(),
+    dy: z.number().optional(),
+    selector: z.string().min(1).optional(),
+    to: z.enum(["top", "bottom"]).optional(),
+    smooth: z.boolean().default(false),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    const count = [v.dx !== undefined || v.dy !== undefined, v.selector !== undefined, v.to !== undefined]
+      .filter(Boolean).length;
+    if (count === 0) {
+      ctx.addIssue({ code: "custom", message: "provide one of: (dx/dy), selector, or to" });
+    }
+    if (count > 1) {
+      ctx.addIssue({ code: "custom", message: "provide exactly one of: (dx/dy), selector, or to" });
+    }
+  });
+export const PageScrollResultSchema = z.object({ ok: z.literal(true) }).strict();
+
 /** Every method the extension must implement. */
 export const METHODS = {
   "tabs.list":     { params: TabsListParamsSchema,     result: TabsListResultSchema },
@@ -93,6 +137,9 @@ export const METHODS = {
   "session.release": { params: SessionReleaseParamsSchema, result: SessionReleaseResultSchema },
   "page.snapshot":   { params: PageSnapshotParamsSchema,   result: PageSnapshotResultSchema },
   "page.screenshot": { params: PageScreenshotParamsSchema, result: PageScreenshotResultSchema },
+  "page.click":      { params: PageClickParamsSchema,      result: PageClickResultSchema },
+  "page.type":       { params: PageTypeParamsSchema,       result: PageTypeResultSchema },
+  "page.scroll":     { params: PageScrollParamsSchema,     result: PageScrollResultSchema },
 } as const;
 export type MethodName = keyof typeof METHODS;
 
