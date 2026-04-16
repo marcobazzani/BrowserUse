@@ -2,9 +2,15 @@ import { z } from "zod";
 import {
   TabsListParamsSchema,
   TabsCreateParamsSchema,
+  TabsCloseParamsSchema,
+  TabsActivateParamsSchema,
   PageNavigateParamsSchema,
   PageSnapshotParamsSchema,
   PageScreenshotParamsSchema,
+  PageClickParamsSchema,
+  PageTypeParamsSchema,
+  PageScrollParamsSchema,
+  SessionReleaseParamsSchema,
 } from "@browseruse/shared";
 import type { BridgeServer } from "./bridge.js";
 
@@ -90,5 +96,70 @@ export function buildTools(bridge: BridgeServer) {
     },
   };
 
-  return { tabs_list, tabs_create, page_navigate, page_snapshot, page_screenshot };
+  const tabs_close: Tool<z.infer<typeof TabsCloseParamsSchema>> = {
+    description: "Close the given tab.",
+    inputSchema: TabsCloseParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      return text(await bridge.call("tabs.close", TabsCloseParamsSchema.parse(params)));
+    },
+  };
+
+  const tabs_activate: Tool<z.infer<typeof TabsActivateParamsSchema>> = {
+    description: "Bring a tab to the foreground in its window.",
+    inputSchema: TabsActivateParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      return text(await bridge.call("tabs.activate", TabsActivateParamsSchema.parse(params)));
+    },
+  };
+
+  const session_release: Tool<z.infer<typeof SessionReleaseParamsSchema>> = {
+    description: "Release a tab from the Claude tab group and remove its overlay. Call when done with a tab.",
+    inputSchema: SessionReleaseParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      return text(await bridge.call("session.release", SessionReleaseParamsSchema.parse(params)));
+    },
+  };
+
+  const page_click: Tool<z.infer<typeof PageClickParamsSchema>> = {
+    description: "Click an element in a tab by CSS selector.",
+    inputSchema: PageClickParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageClickParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.click", parsed));
+    },
+  };
+
+  const page_type: Tool<z.infer<typeof PageTypeParamsSchema>> = {
+    description: "Type text into an input/textarea by CSS selector. Optionally submits the enclosing form.",
+    inputSchema: PageTypeParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageTypeParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.type", parsed));
+    },
+  };
+
+  const page_scroll: Tool<z.infer<typeof PageScrollParamsSchema>> = {
+    description: "Scroll a tab by (dx, dy) pixels, to an element matching a CSS selector, or to 'top'/'bottom'. Provide exactly one target.",
+    inputSchema: PageScrollParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageScrollParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.scroll", parsed));
+    },
+  };
+
+  return {
+    tabs_list, tabs_create, tabs_close, tabs_activate,
+    page_navigate, page_snapshot, page_screenshot,
+    page_click, page_type, page_scroll,
+    session_release,
+  };
 }

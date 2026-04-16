@@ -14,6 +14,12 @@ const fakeBridge = () => {
         if (method === "session.claim") return { ok: true, groupId: 7 };
         if (method === "page.snapshot") return { mode: "text", url: "https://x", title: "x", content: "hi", truncated: false };
         if (method === "page.screenshot") return { format: "png", base64: "aGk=" };
+        if (method === "tabs.close")      return { ok: true };
+        if (method === "tabs.activate")   return { ok: true };
+        if (method === "session.release") return { ok: true };
+        if (method === "page.click")      return { ok: true };
+        if (method === "page.type")       return { ok: true };
+        if (method === "page.scroll")     return { ok: true };
         throw new Error("unexpected method " + method);
       }),
       isConnected: () => true,
@@ -89,5 +95,56 @@ describe("tool adapters", () => {
     const methods = calls.map((c) => c.method);
     // Expected: session.claim once, then two page.navigate calls
     expect(methods).toEqual(["session.claim", "page.navigate", "page.navigate"]);
+  });
+
+  it("tabs_close does NOT auto-claim (no session.claim call)", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.tabs_close.handler({ tabId: 7 });
+    expect(calls.map(c => c.method)).toEqual(["tabs.close"]);
+  });
+
+  it("tabs_activate does NOT auto-claim", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.tabs_activate.handler({ tabId: 7 });
+    expect(calls.map(c => c.method)).toEqual(["tabs.activate"]);
+  });
+
+  it("session_release does NOT auto-claim", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.session_release.handler({ tabId: 7 });
+    expect(calls.map(c => c.method)).toEqual(["session.release"]);
+  });
+
+  it("page_click auto-claims and forwards selector/button/scrollIntoView", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_click.handler({ tabId: 7, selector: "#go" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.click"]);
+    expect((calls[1]!.params as any).selector).toBe("#go");
+    expect((calls[1]!.params as any).button).toBe("left");
+  });
+
+  it("page_type auto-claims and forwards text + submit default", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_type.handler({ tabId: 7, selector: "#q", text: "hi" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.type"]);
+    expect((calls[1]!.params as any).submit).toBe(false);
+  });
+
+  it("page_scroll auto-claims and forwards a selector scroll target", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_scroll.handler({ tabId: 7, selector: "#footer" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.scroll"]);
+  });
+
+  it("page_scroll rejects params with no scroll target", async () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    await expect(tools.page_scroll.handler({ tabId: 7 } as any)).rejects.toThrow();
   });
 });

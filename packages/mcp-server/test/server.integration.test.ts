@@ -20,10 +20,16 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
       const responders: Record<string, unknown> = {
         "tabs.list": [{ tabId: 1, url: "https://a", title: "a", active: true }],
         "tabs.create": { tabId: 99, url: req.params.url, title: "", active: true },
+        "tabs.close": { ok: true },
+        "tabs.activate": { ok: true },
         "page.navigate": { ok: true, finalUrl: req.params.url },
-        "session.claim": { ok: true, groupId: 5 },
         "page.snapshot": { mode: "text", url: "https://a", title: "a", content: "hello", truncated: false },
         "page.screenshot": { format: "png", base64: "AAAA" },
+        "page.click": { ok: true },
+        "page.type": { ok: true },
+        "page.scroll": { ok: true },
+        "session.claim": { ok: true, groupId: 5 },
+        "session.release": { ok: true },
       };
       ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: responders[req.method] }));
     });
@@ -54,6 +60,23 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
     const parsed = JSON.parse((result.content[0] as any).text);
     expect(parsed.content).toBe("hello");
     expect(parsed.mode).toBe("text");
+  });
+
+  it("page_click auto-claims via session.claim then clicks", async () => {
+    const seen: string[] = [];
+    ws.removeAllListeners("message");
+    ws.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      seen.push(req.method);
+      const r: Record<string, unknown> = {
+        "session.claim": { ok: true, groupId: 5 },
+        "page.click": { ok: true },
+      };
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: r[req.method] }));
+    });
+    const tools = buildTools(server);
+    await tools.page_click.handler({ tabId: 1, selector: "#go" });
+    expect(seen).toEqual(["session.claim", "page.click"]);
   });
 
   it("page_navigate auto-claims via session.claim then navigates", async () => {
