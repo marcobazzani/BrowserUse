@@ -1,0 +1,45 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -F @browseruse/shared build
+      - run: pnpm -F @browseruse/mcp-server build
+      - run: pnpm -F @browseruse/extension build
+
+      - name: package extension
+        run: |
+          cd packages/extension/dist
+          zip -r "${{ github.workspace }}/browseruse-extension-${{ github.ref_name }}.zip" .
+
+      - name: package mcp-server
+        run: |
+          cd packages/mcp-server
+          tar -czf "${{ github.workspace }}/browseruse-mcp-server-${{ github.ref_name }}.tgz" \
+            dist package.json README.md 2>/dev/null || \
+          tar -czf "${{ github.workspace }}/browseruse-mcp-server-${{ github.ref_name }}.tgz" \
+            dist package.json
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            browseruse-extension-*.zip
+            browseruse-mcp-server-*.tgz
+          generate_release_notes: true
+          fail_on_unmatched_files: true

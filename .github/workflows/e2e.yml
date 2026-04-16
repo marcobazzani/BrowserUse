@@ -1,0 +1,38 @@
+name: E2E
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"   # daily 04:00 UTC
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      BROWSERUSE_E2E: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm -F @browseruse/extension exec playwright install --with-deps chromium
+
+      - name: run e2e under xvfb
+        run: xvfb-run -a pnpm -F @browseruse/extension test:integration
+
+      - name: upload Playwright artefacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artefacts
+          path: |
+            packages/extension/test-results
+            packages/extension/playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
