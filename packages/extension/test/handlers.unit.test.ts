@@ -19,6 +19,7 @@ function fakeChrome() {
       update: vi.fn(async (_id: number, _p: unknown) => ({})),
       remove: vi.fn(async (_id: number) => {}),
       get: vi.fn(async (id: number) => state.tabs.find((t) => t.id === id)),
+      captureVisibleTab: vi.fn(async (_winId: number, opts: { format: string }) => `data:image/${opts.format};base64,AAAA`),
       onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
       group: vi.fn(async ({ tabIds, groupId }: { tabIds: number[]; groupId?: number }) => {
         if (groupId !== undefined && state.groups.has(groupId)) {
@@ -40,7 +41,15 @@ function fakeChrome() {
       }),
     },
     scripting: {
-      executeScript: vi.fn(async () => [{ result: null }]),
+      executeScript: vi.fn(async (_opts) => [{
+        result: {
+          mode: "text",
+          url: "https://a",
+          title: "a",
+          content: "hello",
+          truncated: false,
+        },
+      }]),
     },
   };
   return state;
@@ -93,5 +102,17 @@ describe("handlers", () => {
     const call = spy.mock.calls[0]![0];
     expect(typeof call.func).toBe("function"); // func, not files
     expect(call.files).toBeUndefined();
+  });
+
+  it("page.snapshot returns the injected function's result", async () => {
+    const resp = await d.handle({ jsonrpc: "2.0", id: 20, method: "page.snapshot", params: { tabId: 1 } });
+    expect((resp.result as any).content).toBe("hello");
+    expect((resp.result as any).mode).toBe("text");
+  });
+
+  it("page.screenshot strips the data URL prefix and returns base64", async () => {
+    const resp = await d.handle({ jsonrpc: "2.0", id: 21, method: "page.screenshot", params: { tabId: 1 } });
+    expect((resp.result as any).base64).toBe("AAAA");
+    expect((resp.result as any).format).toBe("png");
   });
 });
