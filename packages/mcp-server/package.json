@@ -1,0 +1,27 @@
+{
+  "name": "@browseruse/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "browseruse-mcp": "./dist/index.js" },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean --out-dir dist --target node20",
+    "dev": "tsup src/index.ts --format esm --dts --watch --out-dir dist --target node20",
+    "test": "vitest run",
+    "test:unit": "vitest run test/*.unit.test.ts",
+    "test:integration": "vitest run test/*.integration.test.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@browseruse/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.0.3",
+    "ws": "8.18.0",
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/ws": "8.5.13",
+    "tsup": "8.3.5",
+    "typescript": "5.6.3",
+    "vitest": "2.1.5"
+  }
+}
