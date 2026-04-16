@@ -41,4 +41,13 @@ describe("correlator", () => {
       c.resolve({ jsonrpc: "2.0", id: 999, result: null })
     ).not.toThrow();
   });
+
+  it("rejects the previous pending promise if register is called with a duplicate id", async () => {
+    const c = createCorrelator({ timeoutMs: 500 });
+    const first = c.register(42);
+    const second = c.register(42);
+    await expect(first).rejects.toThrow(/reused/i);
+    c.resolve({ jsonrpc: "2.0", id: 42, result: "ok" });
+    await expect(second).resolves.toBe("ok");
+  });
 });

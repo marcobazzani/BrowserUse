@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   ClientHelloSchema,
@@ -24,6 +25,12 @@ export function createCorrelator(opts: { timeoutMs: number }): Correlator {
   return {
     register<T>(id: number) {
       return new Promise<T>((resolve, reject) => {
+        const prev = pending.get(id);
+        if (prev) {
+          clearTimeout(prev.timer);
+          prev.reject(new Error(`id ${id} reused before previous request resolved`));
+          pending.delete(id);
+        }
         const timer = setTimeout(() => {
           pending.delete(id);
           reject(new Error(`request ${id} timed out after ${opts.timeoutMs}ms`));
@@ -72,6 +79,9 @@ export class BridgeServer {
         else reject(new Error("failed to bind"));
       });
       this.wss.on("connection", (ws) => this.onConnection(ws));
+      this.wss.on("error", (err) => {
+        console.error("[browseruse] wss error:", err);
+      });
       this.wss.once("error", reject);
     });
   }
@@ -92,7 +102,15 @@ export class BridgeServer {
       }
       if (!authed) {
         const hello = ClientHelloSchema.safeParse(parsed);
-        if (!hello.success || hello.data.token !== this.token) {
+        if (!hello.success) {
+          ws.close(4003, "bad token");
+          return;
+        }
+        const expected = Buffer.from(this.token, "utf8");
+        const actual = Buffer.from(hello.data.token, "utf8");
+        const match =
+          expected.length === actual.length && timingSafeEqual(expected, actual);
+        if (!match) {
           ws.close(4003, "bad token");
           return;
         }
@@ -132,6 +150,9 @@ export class BridgeServer {
 
   async close(): Promise<void> {
     this.corr.rejectAll(new Error("bridge closing"));
-    await new Promise<void>((r) => this.wss?.close(() => r()));
+    if (!this.wss) return;
+    const wss = this.wss;
+    this.wss = undefined;
+    await new Promise<void>((r) => wss.close(() => r()));
   }
 }

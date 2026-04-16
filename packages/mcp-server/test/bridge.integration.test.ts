@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { BridgeServer } from "../src/bridge.js";
 
@@ -35,8 +35,9 @@ describe("BridgeServer integration", () => {
       }
     });
 
-    // Wait for server to consider us authed, then call.
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => {
+      if (!server.isConnected()) throw new Error("not authed yet");
+    });
     const result = await server.call("tabs.list", {});
     expect(result).toEqual([]);
     ws.close();
