@@ -1,6 +1,6 @@
 # BrowserUse — engineering guardrails
 
-This project is a self-hosted alternative to "Claude in Chrome": a Chrome MV3 extension plus a local Node.js MCP server that lets Claude Code (pointed at AWS Bedrock) drive the user's real, logged-in Chrome. Because the agent operates on a logged-in daily browser — Gmail, banking, internal tools — regressions have real blast radius.
+This project is a self-hosted alternative to "Claude in Chrome": a Chrome MV3 extension plus a local Node.js MCP server that lets Claude Code drive the user's real, logged-in Chrome. Works with any Claude Code backend (Anthropic API, AWS Bedrock, Google Vertex, self-hosted gateway). Because the agent operates on a logged-in daily browser — Gmail, banking, internal tools — regressions have real blast radius.
 
 ## Testing is non-negotiable
 
@@ -37,7 +37,7 @@ If you find yourself writing "verify manually by clicking …" in a PR descripti
 
 ## Other guardrails
 
-- **No telemetry, no outbound non-Bedrock network calls.** This project's raison d'être is GDPR / data residency. If a dependency phones home, it doesn't belong here. Periodically verify with `lsof -iTCP -sTCP:ESTABLISHED -p <mcp-pid>`.
+- **No telemetry, no outbound network calls from the MCP server process.** This project's raison d'être is user control / data residency: the MCP server binds loopback only, and LLM traffic flows Claude Code → whichever backend the user configured, not via us. If a dependency phones home, it doesn't belong here. Periodically verify with `lsof -iTCP -sTCP:ESTABLISHED -p <mcp-pid>`.
 - **Loopback only.** The MCP server's WebSocket binds `127.0.0.1` exclusively, and the extension refuses any non-loopback server.
 - **Token auth on the WS bridge.** Never land a change that accepts unauthenticated connections, even "temporarily for testing."
 - **Wire protocol is the single source of truth.** Both the MCP server and the extension import the same Zod schemas from `packages/shared`. A wire-method rename without a schema update is a bug.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver the MVP spine of BrowserUse — Claude Code (on Bedrock) can list tabs, create tabs, and navigate them in the user's real Chrome via a custom MCP server + MV3 extension, with the "Claude" tab-group and border-overlay UX already wired in. Later plans add the remaining tools (snapshot, click, type, evalJs, screenshot, console, network, gif).
+**Goal:** Deliver the MVP spine of BrowserUse — Claude Code can list tabs, create tabs, and navigate them in the user's real Chrome via a custom MCP server + MV3 extension, with the "Claude" tab-group and border-overlay UX already wired in. Works with any Claude Code backend (Anthropic API, AWS Bedrock, Google Vertex, self-hosted gateway). Later plans add the remaining tools (snapshot, click, type, evalJs, screenshot, console, network, gif).
 
 **Architecture:** Monorepo with three pnpm packages — `shared` (Zod protocol), `mcp-server` (Node.js stdio MCP server + WebSocket bridge on 127.0.0.1), `extension` (Chrome MV3). Claude Code launches the MCP server over stdio; the extension's service worker opens an outbound WebSocket to the server; every MCP tool call is relayed as a JSON-RPC message over the WS and executed with `chrome.*` APIs.
 
@@ -1939,9 +1939,9 @@ git commit -m "feat(extension): popup for token entry + connection status"
 - [ ] **Step 1: Write root `README.md`**
 
 ```markdown
-# BrowserUse — self-hosted "Claude in Chrome" for Bedrock
+# BrowserUse — self-hosted "Claude in Chrome"
 
-Lets Claude Code (pointed at AWS Bedrock) drive your real, logged-in Chrome via an MCP server + MV3 extension. No Anthropic-hosted services, no data leaves Bedrock.
+Lets Claude Code drive your real, logged-in Chrome via an MCP server + MV3 extension. Works with any Claude Code backend (Anthropic API, AWS Bedrock, Google Vertex, self-hosted gateway); the MCP server itself is loopback-only and never phones home.
 
 ## Quickstart
 
@@ -1969,13 +1969,11 @@ Add to `~/.claude/settings.json` (or a project `.mcp.json`):
 }
 ```
 
-Export Bedrock env before starting Claude Code:
+Start Claude Code however you normally do — any backend that Claude Code supports works. Examples:
 
-```bash
-export CLAUDE_CODE_USE_BEDROCK=1
-export AWS_REGION=eu-central-1        # your data-residency region
-export ANTHROPIC_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0
-```
+- Anthropic API: `export ANTHROPIC_API_KEY=...`
+- AWS Bedrock: `export CLAUDE_CODE_USE_BEDROCK=1`, plus `AWS_REGION`, `ANTHROPIC_MODEL`, and AWS credentials
+- Google Vertex: `export CLAUDE_CODE_USE_VERTEX=1`, plus Google credentials
 
 ### First run
 
@@ -2008,7 +2006,7 @@ pnpm test:integration
 ```
 Expected: all green. Any failure blocks the plan.
 
-- [ ] **Step 3: Manual end-to-end with real Claude Code on Bedrock**
+- [ ] **Step 3: Manual end-to-end with real Claude Code**
 
 - Register the MCP server in Claude Code settings (per README).
 - Start a Claude Code session; observe stderr: token is printed.
