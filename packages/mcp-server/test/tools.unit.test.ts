@@ -12,6 +12,8 @@ const fakeBridge = () => {
         if (method === "tabs.create") return { tabId: 2, url: (params as any).url, title: "", active: true };
         if (method === "page.navigate") return { ok: true, finalUrl: (params as any).url };
         if (method === "session.claim") return { ok: true, groupId: 7 };
+        if (method === "page.snapshot") return { mode: "text", url: "https://x", title: "x", content: "hi", truncated: false };
+        if (method === "page.screenshot") return { format: "png", base64: "aGk=" };
         throw new Error("unexpected method " + method);
       }),
       isConnected: () => true,
@@ -61,6 +63,22 @@ describe("tool adapters", () => {
     await tools.tabs_create.handler({ url: "https://example.com" });
     expect(calls.map((c) => c.method)).toEqual(["tabs.create", "session.claim"]);
     expect((calls[1]!.params as any).tabId).toBe(2);
+  });
+
+  it("page_snapshot auto-claims and forwards params", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_snapshot.handler({ tabId: 5 });
+    expect(calls.map((c) => c.method)).toEqual(["session.claim", "page.snapshot"]);
+  });
+
+  it("page_screenshot returns base64 payload in a text content block", async () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    const result = await tools.page_screenshot.handler({ tabId: 5 });
+    const parsed = JSON.parse((result.content[0] as any).text);
+    expect(parsed.format).toBe("png");
+    expect(typeof parsed.base64).toBe("string");
   });
 
   it("page_navigate does not re-claim an already-claimed tab", async () => {

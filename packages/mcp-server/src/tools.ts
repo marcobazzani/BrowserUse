@@ -3,6 +3,8 @@ import {
   TabsListParamsSchema,
   TabsCreateParamsSchema,
   PageNavigateParamsSchema,
+  PageSnapshotParamsSchema,
+  PageScreenshotParamsSchema,
 } from "@browseruse/shared";
 import type { BridgeServer } from "./bridge.js";
 
@@ -64,5 +66,29 @@ export function buildTools(bridge: BridgeServer) {
     },
   };
 
-  return { tabs_list, tabs_create, page_navigate };
+  const page_snapshot: Tool<z.infer<typeof PageSnapshotParamsSchema>> = {
+    description:
+      "Read the page content of a tab. mode=text returns innerText (default). mode=dom returns outerHTML. mode=a11y returns a flattened accessibility tree.",
+    inputSchema: PageSnapshotParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageSnapshotParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.snapshot", parsed));
+    },
+  };
+
+  const page_screenshot: Tool<z.infer<typeof PageScreenshotParamsSchema>> = {
+    description:
+      "Capture a screenshot of the visible area of a tab as a base64-encoded image.",
+    inputSchema: PageScreenshotParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageScreenshotParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.screenshot", parsed));
+    },
+  };
+
+  return { tabs_list, tabs_create, page_navigate, page_snapshot, page_screenshot };
 }

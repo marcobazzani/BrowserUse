@@ -22,6 +22,8 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
         "tabs.create": { tabId: 99, url: req.params.url, title: "", active: true },
         "page.navigate": { ok: true, finalUrl: req.params.url },
         "session.claim": { ok: true, groupId: 5 },
+        "page.snapshot": { mode: "text", url: "https://a", title: "a", content: "hello", truncated: false },
+        "page.screenshot": { format: "png", base64: "AAAA" },
       };
       ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: responders[req.method] }));
     });
@@ -44,6 +46,14 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
     const result = await tools.tabs_list.handler({});
     const parsed = JSON.parse((result.content[0] as any).text);
     expect(parsed[0].url).toBe("https://a");
+  });
+
+  it("page_snapshot round-trips through the real bridge", async () => {
+    const tools = buildTools(server);
+    const result = await tools.page_snapshot.handler({ tabId: 7 });
+    const parsed = JSON.parse((result.content[0] as any).text);
+    expect(parsed.content).toBe("hello");
+    expect(parsed.mode).toBe("text");
   });
 
   it("page_navigate auto-claims via session.claim then navigates", async () => {
