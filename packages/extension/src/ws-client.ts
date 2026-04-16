@@ -15,16 +15,25 @@ export class WsClient {
   private ws?: WebSocket;
   private attempt = 0;
   private closedByUs = false;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private opts: WsClientOptions, private dispatcher: Dispatcher) {}
 
   start() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     this.closedByUs = false;
     this.connect();
   }
 
   stop() {
     this.closedByUs = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     this.ws?.close();
   }
 
@@ -54,7 +63,10 @@ export class WsClient {
       this.opts.onStatus(ev.code === 4003 ? "badToken" : "closed");
       if (this.closedByUs) return;
       const delay = nextBackoffMs(this.attempt++);
-      setTimeout(() => this.connect(), delay);
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = undefined;
+        this.connect();
+      }, delay);
     });
   }
 }
