@@ -1,19 +1,9 @@
 import { Dispatcher } from "./dispatcher.js";
 import { WsClient } from "./ws-client.js";
+import { registerHandlers } from "./handlers/index.js";
 
 const dispatcher = new Dispatcher();
-
-// Handler stubs — filled in Task 6.
-dispatcher.register("tabs.list", async () => {
-  const tabs = await chrome.tabs.query({});
-  return tabs.map((t) => ({
-    tabId: t.id!,
-    url: t.url ?? "",
-    title: t.title ?? "",
-    active: !!t.active,
-    windowId: t.windowId,
-  }));
-});
+registerHandlers(dispatcher);
 
 async function getToken(): Promise<string | null> {
   const { token } = await chrome.storage.local.get("token");
@@ -22,7 +12,7 @@ async function getToken(): Promise<string | null> {
 
 const client = new WsClient(
   {
-    url: "ws://127.0.0.1:59321",
+    url: `ws://127.0.0.1:${59321}`,
     getToken,
     onStatus: (status) => chrome.storage.local.set({ status }),
   },
@@ -30,6 +20,5 @@ const client = new WsClient(
 );
 client.start();
 
-// Wake-up resilience: re-start on service-worker cold boot.
 chrome.runtime.onStartup.addListener(() => client.start());
 chrome.runtime.onInstalled.addListener(() => client.start());
