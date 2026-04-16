@@ -84,4 +84,14 @@ describe("handlers", () => {
     const b = await d.handle({ jsonrpc: "2.0", id: 5, method: "session.claim", params: { tabId: 1 } });
     expect((a.result as any).groupId).toBe((b.result as any).groupId);
   });
+
+  it("session.claim injects overlay via executeScript({ func })", async () => {
+    const spy = (globalThis as any).chrome.scripting.executeScript as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+    await d.handle({ jsonrpc: "2.0", id: 10, method: "session.claim", params: { tabId: 1 } });
+    expect(spy).toHaveBeenCalledTimes(1);
+    const call = spy.mock.calls[0]![0];
+    expect(typeof call.func).toBe("function"); // func, not files
+    expect(call.files).toBeUndefined();
+  });
 });
