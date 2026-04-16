@@ -25,20 +25,13 @@ function guard(bridge: Pick<BridgeServer, "isConnected">) {
   }
 }
 
-const claimed = new Set<number>();
-
-/** Exposed for test teardown only — resets the module-level claim set. */
-export function _resetClaimedForTest(): void {
-  claimed.clear();
-}
-
-async function ensureClaim(bridge: BridgeServer, tabId: number) {
-  if (claimed.has(tabId)) return;
-  await bridge.call("session.claim", { tabId });
-  claimed.add(tabId);
-}
-
 export function buildTools(bridge: BridgeServer) {
+  const claimed = new Set<number>();
+  async function ensureClaim(tabId: number) {
+    if (claimed.has(tabId)) return;
+    await bridge.call("session.claim", { tabId });
+    claimed.add(tabId);
+  }
   const tabs_list: Tool<Record<string, never>> = {
     description: "List all tabs across all windows in the user's Chrome.",
     inputSchema: TabsListParamsSchema,
@@ -55,7 +48,7 @@ export function buildTools(bridge: BridgeServer) {
       guard(bridge);
       const parsed = TabsCreateParamsSchema.parse(params);
       const tab = (await bridge.call("tabs.create", parsed)) as { tabId: number };
-      await ensureClaim(bridge, tab.tabId);
+      await ensureClaim(tab.tabId);
       return text(tab);
     },
   };
@@ -66,7 +59,7 @@ export function buildTools(bridge: BridgeServer) {
     handler: async (params) => {
       guard(bridge);
       const parsed = PageNavigateParamsSchema.parse(params);
-      await ensureClaim(bridge, parsed.tabId);
+      await ensureClaim(parsed.tabId);
       return text(await bridge.call("page.navigate", parsed));
     },
   };

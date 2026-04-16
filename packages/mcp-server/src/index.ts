@@ -5,6 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { BridgeServer } from "./bridge.js";
 import { buildTools } from "./tools.js";
 import { loadConfig } from "./config.js";
@@ -27,21 +28,28 @@ async function main() {
     tools: Object.entries(tools).map(([name, t]) => ({
       name,
       description: t.description,
-      inputSchema: (t.inputSchema as any).toJSON?.() ?? { type: "object" },
+      inputSchema: zodToJsonSchema(t.inputSchema) as Record<string, unknown>,
     })),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const t = (tools as Record<string, (typeof tools)[keyof typeof tools]>)[req.params.name];
     if (!t) throw new Error(`unknown tool ${req.params.name}`);
-    return t.handler((req.params.arguments ?? {}) as never);
+    // Use Parameters<...> for a meaningful cast (rather than `as never`).
+    type P = Parameters<NonNullable<typeof t>["handler"]>[0];
+    return (t.handler as (p: P) => Promise<{ content: Array<{ type: "text"; text: string }> }>)(
+      (req.params.arguments ?? {}) as P
+    );
   });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  process.on("SIGINT", async () => { await bridge.close(); process.exit(0); });
-  process.on("SIGTERM", async () => { await bridge.close(); process.exit(0); });
+  const shutdown = () => {
+    bridge.close().catch((err) => console.error("[browseruse] close error:", err)).finally(() => process.exit(0));
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 main().catch((err) => {

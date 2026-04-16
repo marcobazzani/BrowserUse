@@ -73,16 +73,18 @@ export class BridgeServer {
   async listen(port: number): Promise<number> {
     return new Promise((resolve, reject) => {
       this.wss = new WebSocketServer({ host: "127.0.0.1", port });
+      const onStartupError = (err: Error) => reject(err);
       this.wss.once("listening", () => {
+        this.wss!.off("error", onStartupError);
         const addr = this.wss!.address();
         if (typeof addr === "object" && addr) resolve(addr.port);
         else reject(new Error("failed to bind"));
       });
       this.wss.on("connection", (ws) => this.onConnection(ws));
+      this.wss.once("error", onStartupError);
       this.wss.on("error", (err) => {
         console.error("[browseruse] wss error:", err);
       });
-      this.wss.once("error", reject);
     });
   }
 

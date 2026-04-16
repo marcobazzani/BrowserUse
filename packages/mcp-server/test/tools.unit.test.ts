@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildTools, _resetClaimedForTest } from "../src/tools.js";
+import { describe, expect, it, vi } from "vitest";
+import { buildTools } from "../src/tools.js";
 
 const fakeBridge = () => {
   const calls: Array<{ method: string; params: unknown }> = [];
@@ -20,8 +20,6 @@ const fakeBridge = () => {
 };
 
 describe("tool adapters", () => {
-  beforeEach(() => { _resetClaimedForTest(); });
-
   it("tabs_list forwards with empty params and returns the wire result", async () => {
     const { bridge, calls } = fakeBridge();
     const tools = buildTools(bridge);
@@ -55,5 +53,23 @@ describe("tool adapters", () => {
     (bridge as any).isConnected = () => false;
     const tools = buildTools(bridge);
     await expect(tools.tabs_list.handler({})).rejects.toThrow(/extension/i);
+  });
+
+  it("tabs_create auto-claims the newly created tab", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.tabs_create.handler({ url: "https://example.com" });
+    expect(calls.map((c) => c.method)).toEqual(["tabs.create", "session.claim"]);
+    expect((calls[1]!.params as any).tabId).toBe(2);
+  });
+
+  it("page_navigate does not re-claim an already-claimed tab", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_navigate.handler({ tabId: 5, url: "https://a" });
+    await tools.page_navigate.handler({ tabId: 5, url: "https://b" });
+    const methods = calls.map((c) => c.method);
+    // Expected: session.claim once, then two page.navigate calls
+    expect(methods).toEqual(["session.claim", "page.navigate", "page.navigate"]);
   });
 });

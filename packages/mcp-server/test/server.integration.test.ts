@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { BridgeServer } from "../src/bridge.js";
-import { buildTools, _resetClaimedForTest } from "../src/tools.js";
+import { buildTools } from "../src/tools.js";
 
 describe("server end-to-end (no stdio transport; tools driven directly)", () => {
   let server: BridgeServer;
@@ -34,7 +34,6 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
   });
 
   afterEach(async () => {
-    _resetClaimedForTest();
     ws.removeAllListeners("message");
     ws.close();
     await server.close();
