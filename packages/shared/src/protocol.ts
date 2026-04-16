@@ -14,49 +14,49 @@ export const TabSchema = z.object({
   title: z.string(),
   active: z.boolean(),
   windowId: z.number().int().optional(),
-});
+}).strict();
 export type Tab = z.infer<typeof TabSchema>;
 
 /* Per-method params/results. */
 export const TabsListParamsSchema = z.object({}).strict();
 export const TabsListResultSchema = z.array(TabSchema);
 
-const HttpUrl = z
+export const HttpUrlSchema = z
   .string()
   .url()
   .refine((u) => /^https?:/i.test(u), "only http(s) URLs are allowed");
 
 export const TabsCreateParamsSchema = z
-  .object({ url: HttpUrl, active: z.boolean().default(true) })
+  .object({ url: HttpUrlSchema, active: z.boolean().default(true) })
   .strict();
 export const TabsCreateResultSchema = TabSchema;
 
 export const TabsCloseParamsSchema = z.object({ tabId: z.number().int() }).strict();
-export const TabsCloseResultSchema = z.object({ ok: z.literal(true) });
+export const TabsCloseResultSchema = z.object({ ok: z.literal(true) }).strict();
 
 export const TabsActivateParamsSchema = z.object({ tabId: z.number().int() }).strict();
-export const TabsActivateResultSchema = z.object({ ok: z.literal(true) });
+export const TabsActivateResultSchema = z.object({ ok: z.literal(true) }).strict();
 
 export const PageNavigateParamsSchema = z
   .object({
     tabId: z.number().int(),
-    url: HttpUrl,
+    url: HttpUrlSchema,
     waitUntil: z.enum(["load", "domcontentloaded"]).default("load"),
   })
   .strict();
 export const PageNavigateResultSchema = z.object({
   ok: z.literal(true),
   finalUrl: z.string().url(),
-});
+}).strict();
 
 export const SessionClaimParamsSchema = z.object({ tabId: z.number().int() }).strict();
 export const SessionClaimResultSchema = z.object({
   ok: z.literal(true),
   groupId: z.number().int(),
-});
+}).strict();
 
 export const SessionReleaseParamsSchema = z.object({ tabId: z.number().int() }).strict();
-export const SessionReleaseResultSchema = z.object({ ok: z.literal(true) });
+export const SessionReleaseResultSchema = z.object({ ok: z.literal(true) }).strict();
 
 /** Every method the extension must implement. */
 export const METHODS = {
@@ -69,6 +69,9 @@ export const METHODS = {
   "session.release": { params: SessionReleaseParamsSchema, result: SessionReleaseResultSchema },
 } as const;
 export type MethodName = keyof typeof METHODS;
+
+export type MethodParams<M extends MethodName> = z.input<(typeof METHODS)[M]["params"]>;
+export type MethodResult<M extends MethodName> = z.output<(typeof METHODS)[M]["result"]>;
 
 /** JSON-RPC 2.0 request / response envelopes. */
 export const RpcRequestSchema = z.object({

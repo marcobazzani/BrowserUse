@@ -54,4 +54,27 @@ describe("protocol round-trip", () => {
     };
     expect(RpcResponseSchema.parse(err)).toEqual(err);
   });
+
+  it("rejects rpc response with both result and error", () => {
+    expect(() =>
+      RpcResponseSchema.parse({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { anything: true },
+        error: { code: -32000, message: "nope" },
+      })
+    ).toThrow();
+  });
+
+  it("rejects rpc response with neither result nor error", () => {
+    expect(() =>
+      RpcResponseSchema.parse({ jsonrpc: "2.0", id: 1 })
+    ).toThrow();
+  });
+
+  it("rejects tabs.create params with unknown fields (strict)", () => {
+    expect(() =>
+      TabsCreateParamsSchema.parse({ url: "https://example.com", bogus: true })
+    ).toThrow();
+  });
 });
