@@ -115,4 +115,56 @@ describe("handlers", () => {
     expect((resp.result as any).base64).toBe("AAAA");
     expect((resp.result as any).format).toBe("png");
   });
+
+  it("page.click dispatches executeScript with the click helper and returns ok", async () => {
+    (globalThis as any).chrome.scripting.executeScript = vi.fn(async () => [{ result: { ok: true } }]);
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 30, method: "page.click",
+      params: { tabId: 1, selector: "#go" },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const call = ((globalThis as any).chrome.scripting.executeScript as any).mock.calls[0][0];
+    expect(typeof call.func).toBe("function");
+    expect(call.args).toEqual(["#go", "left", true]);
+  });
+
+  it("page.click surfaces an injected-function error via the 'error' field", async () => {
+    (globalThis as any).chrome.scripting.executeScript = vi.fn(async () => [
+      { error: new Error("selector did not match: #nope") },
+    ]);
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 31, method: "page.click",
+      params: { tabId: 1, selector: "#nope" },
+    });
+    expect(resp.error?.message).toMatch(/selector did not match/);
+  });
+
+  it("page.type passes the correct args array", async () => {
+    (globalThis as any).chrome.scripting.executeScript = vi.fn(async () => [{ result: { ok: true } }]);
+    await d.handle({
+      jsonrpc: "2.0", id: 32, method: "page.type",
+      params: { tabId: 1, selector: "#q", text: "hello", submit: true },
+    });
+    const call = ((globalThis as any).chrome.scripting.executeScript as any).mock.calls[0][0];
+    expect(call.args).toEqual(["#q", "hello", true, true]);
+  });
+
+  it("page.scroll to=bottom passes correct args", async () => {
+    (globalThis as any).chrome.scripting.executeScript = vi.fn(async () => [{ result: { ok: true } }]);
+    await d.handle({
+      jsonrpc: "2.0", id: 33, method: "page.scroll",
+      params: { tabId: 1, to: "bottom" },
+    });
+    const call = ((globalThis as any).chrome.scripting.executeScript as any).mock.calls[0][0];
+    // args order: [dx, dy, selector, to, smooth]
+    expect(call.args).toEqual([undefined, undefined, undefined, "bottom", false]);
+  });
+
+  it("page.scroll rejects params that mix dy + selector", async () => {
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 34, method: "page.scroll",
+      params: { tabId: 1, dy: 100, selector: "#x" },
+    });
+    expect(resp.error?.message).toMatch(/exactly one/i);
+  });
 });
