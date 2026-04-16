@@ -1,6 +1,6 @@
-const statusEl = document.getElementById("status") as HTMLParagraphElement;
-const tokenEl = document.getElementById("token") as HTMLInputElement;
-const saveEl = document.getElementById("save") as HTMLButtonElement;
+const statusEl = document.getElementById("status");
+const tokenEl = document.getElementById("token");
+const saveEl = document.getElementById("save");
 
 async function refresh() {
   const { status, token } = await chrome.storage.local.get(["status", "token"]);
