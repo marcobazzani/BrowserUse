@@ -6,6 +6,8 @@ import {
   TabsListResultSchema,
   TabsCreateParamsSchema,
   PageNavigateParamsSchema,
+  PageSnapshotParamsSchema,
+  PageScreenshotParamsSchema,
   SessionClaimResultSchema,
 } from "../src/protocol.js";
 
@@ -76,5 +78,19 @@ describe("protocol round-trip", () => {
     expect(() =>
       TabsCreateParamsSchema.parse({ url: "https://example.com", bogus: true })
     ).toThrow();
+  });
+
+  it("page.snapshot params default mode=text and maxBytes=500000", () => {
+    const parsed = PageSnapshotParamsSchema.parse({ tabId: 1 });
+    expect(parsed.mode).toBe("text");
+    expect(parsed.maxBytes).toBe(500_000);
+  });
+
+  it("page.screenshot params default format=png", () => {
+    expect(PageScreenshotParamsSchema.parse({ tabId: 1 }).format).toBe("png");
+  });
+
+  it("page.snapshot rejects mode outside enum", () => {
+    expect(() => PageSnapshotParamsSchema.parse({ tabId: 1, mode: "xml" })).toThrow();
   });
 });

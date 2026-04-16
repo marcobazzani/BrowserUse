@@ -58,6 +58,30 @@ export const SessionClaimResultSchema = z.object({
 export const SessionReleaseParamsSchema = z.object({ tabId: z.number().int() }).strict();
 export const SessionReleaseResultSchema = z.object({ ok: z.literal(true) }).strict();
 
+export const PageSnapshotParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    mode: z.enum(["text", "dom", "a11y"]).default("text"),
+    maxBytes: z.number().int().positive().max(2_000_000).default(500_000),
+  })
+  .strict();
+export const PageSnapshotResultSchema = z
+  .object({
+    mode: z.enum(["text", "dom", "a11y"]),
+    url: z.string(),
+    title: z.string(),
+    content: z.string(),
+    truncated: z.boolean(),
+  })
+  .strict();
+
+export const PageScreenshotParamsSchema = z
+  .object({ tabId: z.number().int(), format: z.enum(["png", "jpeg"]).default("png") })
+  .strict();
+export const PageScreenshotResultSchema = z
+  .object({ format: z.enum(["png", "jpeg"]), base64: z.string() })
+  .strict();
+
 /** Every method the extension must implement. */
 export const METHODS = {
   "tabs.list":     { params: TabsListParamsSchema,     result: TabsListResultSchema },
@@ -67,6 +91,8 @@ export const METHODS = {
   "page.navigate": { params: PageNavigateParamsSchema, result: PageNavigateResultSchema },
   "session.claim": { params: SessionClaimParamsSchema, result: SessionClaimResultSchema },
   "session.release": { params: SessionReleaseParamsSchema, result: SessionReleaseResultSchema },
+  "page.snapshot":   { params: PageSnapshotParamsSchema,   result: PageSnapshotResultSchema },
+  "page.screenshot": { params: PageScreenshotParamsSchema, result: PageScreenshotResultSchema },
 } as const;
 export type MethodName = keyof typeof METHODS;
 
