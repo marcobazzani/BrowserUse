@@ -6,7 +6,7 @@ Lets Claude Code drive your real, logged-in Chrome via a local MCP server + MV3 
 
 ## What you get
 
-MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket (token-authed). Current set (v0.3):
+MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket (token-authed). Current set (v0.3.0):
 
 - **Tabs:** `tabs_list`, `tabs_create`, `tabs_close`, `tabs_activate`
 - **Navigation & read:** `page_navigate`, `page_snapshot` (text / dom / a11y), `page_screenshot`
@@ -19,9 +19,9 @@ Every interactive tool auto-claims its target tab: the tab is put into a distinc
 ## Requirements
 
 - Node 20+
-- pnpm 9.x (`npm install -g pnpm@9` if not present)
 - A Chromium-based browser (Chrome, Edge, Brave, Arc) — 116+
 - Claude Code (or any MCP-capable client)
+- **Contributors only:** pnpm 9.x (`npm install -g pnpm@9`)
 
 ## Quickstart (users)
 
@@ -114,6 +114,5 @@ All connections shown should be `127.0.0.1`.
 
 ## Known limitations
 
-- MV3 service workers can go to sleep after ~30 s idle. If tool calls hang, clicking any tab reactivates the worker; the `runtime-robustness` plan adds a keepalive.
-- The overlay cannot inject into `chrome://` pages, the Chrome Web Store, or sites with particularly aggressive CSP — the tab group badge still appears, but not the border.
-- Developer-mode install only (no Chrome Web Store packaging yet).
+- The overlay cannot inject into `chrome://` pages, the Chrome Web Store, or sites with particularly aggressive CSP — the tab group badge and an orange toolbar dot still appear, but the border does not.
+- Developer-mode extension install only (no Chrome Web Store listing yet — manifest and privacy policy are ready).
