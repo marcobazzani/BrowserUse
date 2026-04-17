@@ -27,6 +27,7 @@ const fakeBridge = () => {
         if (method === "page.select")     return { ok: true, selected: ["opt1"] };
         if (method === "page.uploadFile") return { ok: true, uploadedCount: 1 };
         if (method === "page.drag")       return { ok: true };
+        if (method === "page.fetch")      return { ok: true, status: 200, statusText: "OK", headers: {}, body: { hello: "world" }, json: true, truncated: false, finalUrl: "https://x/api" };
         if (method === "page.evalJs")    return { type: "string", value: "hi" };
         if (method === "console.read")   return [{ ts: 1, level: "error", text: "boom" }];
         if (method === "network.read")   return [{ ts: 1, method: "GET", url: "https://a", type: "Document", status: 200, durationMs: 12 }];
@@ -259,5 +260,29 @@ describe("tool adapters", () => {
     expect(calls.map(c => c.method)).toEqual(["session.claim", "page.drag"]);
     expect((calls[1]!.params as any).fromUid).toBe("e1");
     expect((calls[1]!.params as any).toUid).toBe("e2");
+  });
+
+  it("page_fetch auto-claims (when tabId given) and forwards url+method+body", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    const result = await tools.page_fetch.handler({
+      tabId: 7,
+      url: "/api/x",
+      method: "POST",
+      body: { a: 1 },
+    });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.fetch"]);
+    expect((calls[1]!.params as any).url).toBe("/api/x");
+    expect((calls[1]!.params as any).method).toBe("POST");
+    const parsed = JSON.parse((result.content[0] as any).text);
+    expect(parsed.json).toBe(true);
+    expect(parsed.body).toEqual({ hello: "world" });
+  });
+
+  it("page_fetch without tabId does NOT auto-claim (observational)", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_fetch.handler({ url: "/api/x" });
+    expect(calls.map(c => c.method)).toEqual(["page.fetch"]);
   });
 });

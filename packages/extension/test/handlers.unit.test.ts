@@ -470,6 +470,67 @@ describe("handlers", () => {
   });
 
   // --- page.drag ---
+  // --- page.fetch ---
+  it("page.fetch runs Runtime.evaluate with a fetch() wrapper and returns the in-page response", async () => {
+    const origSend = (globalThis as any).chrome.debugger.sendCommand;
+    (globalThis as any).chrome.debugger.sendCommand = vi.fn(async (t: any, method: string, params: any) => {
+      if (method === "Runtime.evaluate" && params?.expression?.includes("await fetch(cfg.url")) {
+        return {
+          result: {
+            type: "object",
+            value: {
+              ok: true, status: 200, statusText: "OK",
+              headers: { "content-type": "application/json" },
+              body: { id: 42 }, json: true, truncated: false, finalUrl: "https://x/api/y",
+            },
+          },
+        };
+      }
+      return origSend(t, method, params);
+    });
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 500, method: "page.fetch",
+      params: { tabId: 1, url: "/api/y", method: "POST", body: { q: 1 } },
+    });
+    const r = resp.result as any;
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe(200);
+    expect(r.json).toBe(true);
+    expect(r.body).toEqual({ id: 42 });
+    // Ensure the body we embedded in the expression was stringified JSON
+    const evalCall = ((globalThis as any).chrome.debugger.sendCommand as any).mock.calls
+      .find((a: any[]) => a[1] === "Runtime.evaluate");
+    expect(evalCall[2].expression).toContain('"method":"POST"');
+    expect(evalCall[2].expression).toContain('"body":"{\\"q\\":1}"');
+    (globalThis as any).chrome.debugger.sendCommand = origSend;
+  });
+
+  it("page.fetch surfaces an in-page fetch failure via _error", async () => {
+    const origSend = (globalThis as any).chrome.debugger.sendCommand;
+    (globalThis as any).chrome.debugger.sendCommand = vi.fn(async (t: any, method: string, params: any) => {
+      if (method === "Runtime.evaluate" && params?.expression?.includes("await fetch(cfg.url")) {
+        return {
+          result: {
+            type: "object",
+            value: {
+              ok: false, status: 0, statusText: "",
+              headers: {}, body: null, json: false, truncated: false,
+              finalUrl: "/api/y", _error: "NetworkError: Failed to fetch",
+            },
+          },
+        };
+      }
+      return origSend(t, method, params);
+    });
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 501, method: "page.fetch",
+      params: { tabId: 1, url: "/api/y" },
+    });
+    expect(resp.error?.message).toMatch(/NetworkError|failed/i);
+    (globalThis as any).chrome.debugger.sendCommand = origSend;
+  });
+
+  // --- page.drag ---
   it("page.drag dispatches press + moves + release mouse events", async () => {
     const uids = await snapshotUids(1);
     state.debuggerState.commands = [];

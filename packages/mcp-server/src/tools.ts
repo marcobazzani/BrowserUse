@@ -17,6 +17,7 @@ import {
   PageSelectParamsSchema,
   PageUploadFileParamsSchema,
   PageDragParamsSchema,
+  PageFetchParamsSchema,
   SessionReleaseParamsSchema,
   PageEvalJsParamsSchema,
   ConsoleReadParamsSchema,
@@ -254,6 +255,18 @@ export function buildTools(bridge: BridgeServer) {
     },
   };
 
+  const page_fetch: Tool<z.infer<typeof PageFetchParamsSchema>> = {
+    description:
+      "Run fetch() inside the page's JavaScript context and return the response. Reuses the page's cookies, auth tokens, and same-origin rules — ideal for calling backend APIs the page itself talks to (e.g. CRM/ERP/banking endpoints). Returns {ok, status, statusText, headers, body, json, truncated, finalUrl}. Body is auto-parsed when content-type is JSON. Prefer over page_eval_js when you're doing API calls — one round-trip instead of three.",
+    inputSchema: PageFetchParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageFetchParamsSchema.parse(params);
+      if (parsed.tabId !== undefined) await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.fetch", parsed));
+    },
+  };
+
   const page_eval_js: Tool<z.infer<typeof PageEvalJsParamsSchema>> = {
     description:
       "Evaluate a JavaScript expression in a tab's context. Use as an escape hatch when other tools don't cover your needs. If tabId is omitted, reads the active tab.",
@@ -291,6 +304,6 @@ export function buildTools(bridge: BridgeServer) {
     page_hover, page_press_key, page_fill_form,
     page_handle_dialog, page_select, page_upload_file, page_drag,
     session_release,
-    page_eval_js, console_read, network_read,
+    page_fetch, page_eval_js, console_read, network_read,
   };
 }

@@ -19,6 +19,7 @@ import {
   PageSelectParamsSchema,
   PageUploadFileParamsSchema,
   PageDragParamsSchema,
+  PageFetchParamsSchema,
   PageEvalJsParamsSchema,
   ConsoleReadParamsSchema,
   ConsoleReadResultSchema,
@@ -324,5 +325,28 @@ describe("protocol round-trip", () => {
   });
   it("page.drag rejects steps over 50", () => {
     expect(() => PageDragParamsSchema.parse({ tabId: 1, fromUid: "e1", toUid: "e2", steps: 100 })).toThrow();
+  });
+
+  // --- fetch ---
+  it("page.fetch defaults method=GET, credentials=include, timeoutMs=15000", () => {
+    const p = PageFetchParamsSchema.parse({ url: "/api/foo" });
+    expect(p.method).toBe("GET");
+    expect(p.credentials).toBe("include");
+    expect(p.timeoutMs).toBe(15_000);
+    expect(p.maxBytes).toBe(200_000);
+  });
+  it("page.fetch accepts JSON body as object", () => {
+    const p = PageFetchParamsSchema.parse({ url: "/api", method: "POST", body: { a: 1 } });
+    expect(p.body).toEqual({ a: 1 });
+  });
+  it("page.fetch accepts body as string", () => {
+    const p = PageFetchParamsSchema.parse({ url: "/api", method: "POST", body: "raw=text" });
+    expect(p.body).toBe("raw=text");
+  });
+  it("page.fetch rejects unknown HTTP method", () => {
+    expect(() => PageFetchParamsSchema.parse({ url: "/api", method: "TRACE" })).toThrow();
+  });
+  it("page.fetch rejects timeoutMs > 60000", () => {
+    expect(() => PageFetchParamsSchema.parse({ url: "/api", timeoutMs: 999999 })).toThrow();
   });
 });

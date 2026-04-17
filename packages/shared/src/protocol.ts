@@ -316,6 +316,38 @@ export const PageDragResultSchema = z
   })
   .strict();
 
+/* ---------- Fetch (in-page) ---------- */
+
+export const PageFetchParamsSchema = z
+  .object({
+    tabId: z.number().int().optional(),
+    url: z.string().min(1),   // relative or absolute; resolved against the page origin
+    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).default("GET"),
+    headers: z.record(z.string()).optional(),
+    // Body may be a string or a JSON-serialisable object (we stringify objects).
+    body: z.union([z.string(), z.record(z.unknown()), z.array(z.unknown())]).optional(),
+    credentials: z.enum(["include", "same-origin", "omit"]).default("include"),
+    timeoutMs: z.number().int().positive().max(60_000).default(15_000),
+    // Cap on response body bytes (text length). Default 200 KB.
+    maxBytes: z.number().int().positive().max(2_000_000).default(200_000),
+  })
+  .strict();
+
+export const PageFetchResultSchema = z
+  .object({
+    ok: z.boolean(),
+    status: z.number().int(),
+    statusText: z.string(),
+    headers: z.record(z.string()),
+    // Body: parsed JSON if content-type is JSON, else raw text.
+    body: z.unknown(),
+    // Whether body was auto-parsed as JSON.
+    json: z.boolean(),
+    truncated: z.boolean(),
+    finalUrl: z.string(),
+  })
+  .strict();
+
 /* ---------- Escape hatch & logs ---------- */
 
 export const PageEvalJsParamsSchema = z.object({
@@ -382,6 +414,7 @@ export const METHODS = {
   "page.select":     { params: PageSelectParamsSchema,     result: PageSelectResultSchema },
   "page.uploadFile": { params: PageUploadFileParamsSchema, result: PageUploadFileResultSchema },
   "page.drag":       { params: PageDragParamsSchema,       result: PageDragResultSchema },
+  "page.fetch":      { params: PageFetchParamsSchema,      result: PageFetchResultSchema },
   "page.evalJs":     { params: PageEvalJsParamsSchema,     result: PageEvalJsResultSchema },
   "console.read":    { params: ConsoleReadParamsSchema,    result: ConsoleReadResultSchema },
   "network.read":    { params: NetworkReadParamsSchema,    result: NetworkReadResultSchema },
