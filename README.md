@@ -39,16 +39,6 @@ Then follow the printed instructions (load unpacked extension + paste token). Se
 curl -fsSL https://raw.githubusercontent.com/marcobazzani/BrowserUse/main/scripts/uninstall.sh | bash
 ```
 
-## Privacy / data-residency
-
-The MCP server binds loopback only and never makes outbound network calls — LLM traffic goes directly from Claude Code to whichever backend you've configured. Verify:
-
-```bash
-lsof -iTCP -sTCP:ESTABLISHED -p "$(pgrep -f 'mcp-server/dist/index.js')"
-```
-
-All connections shown should be `127.0.0.1`.
-
 ## Known limitations
 
 - The overlay cannot inject into `chrome://` pages, the Chrome Web Store, or sites with particularly aggressive CSP — the tab group badge and an orange toolbar dot still appear, but the border does not.
