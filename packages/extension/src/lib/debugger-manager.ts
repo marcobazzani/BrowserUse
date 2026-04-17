@@ -108,8 +108,9 @@ export class DebuggerManager {
       return (await chrome.debugger.sendCommand({ tabId }, method, params as object)) as T;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (!/not attached/i.test(msg)) throw e;
-      // Chrome detached us (navigation, reload). Clear state and retry once.
+      // Cover both "Debugger is not attached" (between calls) and "Detached while
+      // handling command" (debugger got torn off mid-flight, e.g. on navigation).
+      if (!/not attached|detached/i.test(msg)) throw e;
       this.attached.delete(tabId);
       await this.attach(tabId);
       return (await chrome.debugger.sendCommand({ tabId }, method, params as object)) as T;

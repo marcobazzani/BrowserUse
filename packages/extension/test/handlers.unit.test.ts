@@ -406,6 +406,69 @@ describe("handlers", () => {
     expect(sffiCalls[0].params.files).toEqual(["/tmp/a.png"]);
   });
 
+  // --- cross-extension fallback in page.type ---
+  it("page.type falls back to coordinate click when focus hits 'chrome-extension://' error", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    const origSend = (globalThis as any).chrome.debugger.sendCommand;
+    (globalThis as any).chrome.debugger.sendCommand = vi.fn(async (t: any, method: string, params: any) => {
+      if (method === "Runtime.callFunctionOn" && params?.functionDeclaration?.includes("focus()")) {
+        throw new Error("Cannot access a chrome-extension:// URL of different extension");
+      }
+      return origSend(t, method, params);
+    });
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 300, method: "page.type",
+      params: { tabId: 1, uid: uids[1], text: "secret123" },
+    });
+    // Should succeed via fallback
+    expect((resp.result as any).ok).toBe(true);
+    // insertText must still have run
+    const calls = ((globalThis as any).chrome.debugger.sendCommand as any).mock.calls.map((a: any[]) => a[1]);
+    expect(calls).toContain("Input.insertText");
+    // Coordinate-click (mousePressed + mouseReleased) must have been used
+    const mouseEvents = ((globalThis as any).chrome.debugger.sendCommand as any).mock.calls
+      .filter((a: any[]) => a[1] === "Input.dispatchMouseEvent")
+      .map((a: any[]) => a[2].type);
+    expect(mouseEvents).toContain("mousePressed");
+    expect(mouseEvents).toContain("mouseReleased");
+    (globalThis as any).chrome.debugger.sendCommand = origSend;
+  });
+
+  it("page.type surfaces a human-readable error when cross-extension blocks everything", async () => {
+    const uids = await snapshotUids(1);
+    const origSend = (globalThis as any).chrome.debugger.sendCommand;
+    (globalThis as any).chrome.debugger.sendCommand = vi.fn(async (_t: any, method: string, _p: any) => {
+      if (method === "Runtime.enable" || method === "Network.enable" || method === "Accessibility.enable" || method === "Page.enable") return {};
+      throw new Error("Cannot access a chrome-extension:// URL of different extension");
+    });
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 301, method: "page.type",
+      params: { tabId: 1, uid: uids[1], text: "x" },
+    });
+    expect(resp.error?.message).toMatch(/interaction blocked by another Chrome extension/i);
+    (globalThis as any).chrome.debugger.sendCommand = origSend;
+  });
+
+  // --- DebuggerManager retry broadened ---
+  it("sendCommand retries once on 'Detached while handling command'", async () => {
+    // Re-use the pending pair manager indirectly via any CDP-using handler.
+    let calls = 0;
+    const origSend = (globalThis as any).chrome.debugger.sendCommand;
+    (globalThis as any).chrome.debugger.sendCommand = vi.fn(async (t: any, method: string, params: any) => {
+      if (method === "Accessibility.getFullAXTree") {
+        calls++;
+        if (calls === 1) throw new Error("Detached while handling command.");
+        return origSend(t, method, params);
+      }
+      return origSend(t, method, params);
+    });
+    const resp = await d.handle({ jsonrpc: "2.0", id: 310, method: "page.snapshot", params: { tabId: 1 } });
+    expect(resp.error).toBeUndefined();
+    expect(calls).toBe(2);
+    (globalThis as any).chrome.debugger.sendCommand = origSend;
+  });
+
   // --- page.drag ---
   it("page.drag dispatches press + moves + release mouse events", async () => {
     const uids = await snapshotUids(1);

@@ -90,6 +90,53 @@ async function maybeSnapshot(
   return takeA11ySnapshot(mgr, tabId);
 }
 
+/**
+ * Chrome refuses CDP operations against objects inside an iframe owned by
+ * another extension (typically 1Password, Bitwarden, or anti-phishing
+ * overlays). We detect that error so we can fall back to coordinate-level
+ * operations that don't require JS-context access to the element.
+ */
+function isCrossExtensionError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /chrome-extension:\/\/.*different extension/i.test(msg);
+}
+
+/** Turn opaque CDP errors into actionable advice at the tool boundary. */
+function translateCdpError(e: unknown): Error {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (isCrossExtensionError(e)) {
+    return new Error(
+      "interaction blocked by another Chrome extension injecting a chrome-extension:// iframe " +
+      "over the target element (typically 1Password / Bitwarden autofill or an anti-phishing overlay). " +
+      "Click somewhere neutral on the page to dismiss it and retry, or disable the conflicting extension " +
+      "for this site. Original: " + msg,
+    );
+  }
+  return e instanceof Error ? e : new Error(msg);
+}
+
+/** Click at element coordinates without needing JS access (works through cross-extension overlays). */
+async function coordinateClick(
+  mgr: DebuggerManager,
+  tabId: number,
+  objectId: string,
+): Promise<void> {
+  const box = await mgr.sendCommand<{ model: { content: number[] } }>(
+    tabId,
+    "DOM.getBoxModel",
+    { objectId },
+  );
+  const q = box.model.content;
+  const x = (q[0] + q[2] + q[4] + q[6]) / 4;
+  const y = (q[1] + q[3] + q[5] + q[7]) / 4;
+  await mgr.sendCommand(tabId, "Input.dispatchMouseEvent", {
+    type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1,
+  });
+  await mgr.sendCommand(tabId, "Input.dispatchMouseEvent", {
+    type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1,
+  });
+}
+
 // In-page scroll function (self-contained, no closures).
 function inPageScroll(
   dx: number | undefined,
@@ -175,15 +222,34 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
 
   d.register("page.type", async (raw) => {
     const p = PageTypeParamsSchema.parse(raw);
-    const el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
-    // Focus the element.
-    await mgr.sendCommand(p.tabId, "Runtime.callFunctionOn", {
-      objectId: el.objectId,
-      functionDeclaration: `function() { this.focus(); }`,
-      returnByValue: true,
-    });
-    if (p.clear) {
-      // Select all + delete to clear.
+    let el;
+    try {
+      el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
+    } catch (e) {
+      throw translateCdpError(e);
+    }
+
+    // Primary path: focus+clear via JS. Falls through to coordinate-click when
+    // the element sits inside another extension's iframe (1Password autofill,
+    // anti-phishing overlays) and Chrome refuses JS access.
+    let usedFallback = false;
+    try {
+      await mgr.sendCommand(p.tabId, "Runtime.callFunctionOn", {
+        objectId: el.objectId,
+        functionDeclaration: `function() { this.focus(); }`,
+        returnByValue: true,
+      });
+    } catch (e) {
+      if (!isCrossExtensionError(e)) throw translateCdpError(e);
+      usedFallback = true;
+      try {
+        await coordinateClick(mgr, p.tabId, el.objectId);
+      } catch (ce) {
+        throw translateCdpError(ce);
+      }
+    }
+
+    if (p.clear && !usedFallback) {
       await mgr.sendCommand(p.tabId, "Runtime.callFunctionOn", {
         objectId: el.objectId,
         functionDeclaration: `function() {
@@ -191,17 +257,28 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
           else if (this.isContentEditable) { this.textContent = ''; }
         }`,
         returnByValue: true,
-      });
+      }).catch((e) => { if (!isCrossExtensionError(e)) throw translateCdpError(e); });
     }
-    // Type via CDP insertText for framework compatibility.
-    await mgr.sendCommand(p.tabId, "Input.insertText", { text: p.text });
-    if (p.submit) {
+    // In fallback mode we can't read the field; a Ctrl/Cmd+A + Delete keyboard
+    // sequence would clear but is platform-dependent — we skip clear rather
+    // than risk firing the wrong key combo. Most login fields are empty anyway.
+
+    // Type via CDP insertText for framework compatibility. Targets the focused
+    // element — works in both the normal and fallback paths.
+    try {
+      await mgr.sendCommand(p.tabId, "Input.insertText", { text: p.text });
+    } catch (e) {
+      throw translateCdpError(e);
+    }
+
+    if (p.submit && !usedFallback) {
       await mgr.sendCommand(p.tabId, "Runtime.callFunctionOn", {
         objectId: el.objectId,
         functionDeclaration: `function() { if (this.form) this.form.requestSubmit(); }`,
         returnByValue: true,
-      });
+      }).catch((e) => { if (!isCrossExtensionError(e)) throw translateCdpError(e); });
     }
+
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, snapshot };
   });
@@ -259,29 +336,44 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     let filled = 0;
     for (const field of p.fields) {
       const el = await resolveElement(mgr, p.tabId, field.uid, field.selector);
-      // Focus.
-      await mgr.sendCommand(p.tabId, "Runtime.callFunctionOn", {
-        objectId: el.objectId,
-        functionDeclaration: `function() {
-          this.focus();
-          if ('value' in this) { this.value = ''; this.dispatchEvent(new Event('input', {bubbles:true})); }
-          else if (this.isContentEditable) { this.textContent = ''; }
-        }`,
-        returnByValue: true,
-      });
-      // Type.
-      await mgr.sendCommand(p.tabId, "Input.insertText", { text: field.value });
+      // Focus + clear via JS; fall back to coordinate click when blocked by another extension.
+      let usedFallback = false;
+      try {
+        await mgr.sendCommand(p.tabId, "Runtime.callFunctionOn", {
+          objectId: el.objectId,
+          functionDeclaration: `function() {
+            this.focus();
+            if ('value' in this) { this.value = ''; this.dispatchEvent(new Event('input', {bubbles:true})); }
+            else if (this.isContentEditable) { this.textContent = ''; }
+          }`,
+          returnByValue: true,
+        });
+      } catch (e) {
+        if (!isCrossExtensionError(e)) throw translateCdpError(e);
+        usedFallback = true;
+        try {
+          await coordinateClick(mgr, p.tabId, el.objectId);
+        } catch (ce) {
+          throw translateCdpError(ce);
+        }
+      }
+      try {
+        await mgr.sendCommand(p.tabId, "Input.insertText", { text: field.value });
+      } catch (e) {
+        throw translateCdpError(e);
+      }
       filled++;
+      // Nudge the cached usedFallback so tsc knows it's observed.
+      void usedFallback;
     }
     if (p.submit) {
-      // Submit the form of the last field.
       const lastField = p.fields[p.fields.length - 1];
-      const el = await resolveElement(mgr, p.tabId, lastField.uid, lastField.selector);
+      const el = await resolveElement(mgr, p.tabId, lastField!.uid, lastField!.selector);
       await mgr.sendCommand(p.tabId, "Runtime.callFunctionOn", {
         objectId: el.objectId,
         functionDeclaration: `function() { if (this.form) this.form.requestSubmit(); }`,
         returnByValue: true,
-      });
+      }).catch((e) => { if (!isCrossExtensionError(e)) throw translateCdpError(e); });
     }
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, filledCount: filled, snapshot };
