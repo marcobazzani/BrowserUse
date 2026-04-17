@@ -10,12 +10,13 @@ import { buildTools } from "./tools.js";
 import { loadConfig } from "./config.js";
 
 async function main() {
-  const cfg = loadConfig();
+  const cfg = await loadConfig();
   const bridge = new BridgeServer({ token: cfg.token, timeoutMs: cfg.timeoutMs });
   await bridge.listen(cfg.port);
   const prefix = cfg.token.slice(0, 8);
+  const mode = cfg.derived ? "derived" : "explicit (env)";
   console.error(
-    `[browseruse] listening on ws://127.0.0.1:${cfg.port}. Token prefix: ${prefix}... (full token at ${cfg.tokenFile})`
+    `[browseruse] listening on ws://127.0.0.1:${cfg.port}. Token: ${prefix}... (${mode}; file: ${cfg.tokenFile})`
   );
 
   const tools = buildTools(bridge);

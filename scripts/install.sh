@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# BrowserUse installer — downloads the latest release, sets up a token, registers
-# the MCP server with Claude Code, and tells you how to load the extension.
+# BrowserUse installer — downloads the latest release and registers the MCP
+# server with Claude Code. Pairing is automatic: the extension and the MCP
+# server derive the same token+port from your timezone + OS on each start.
+# No copy-paste, no port config.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/marcobazzani/BrowserUse/main/scripts/install.sh | bash
@@ -11,7 +13,6 @@ REPO="marcobazzani/BrowserUse"
 INSTALL_DIR="${HOME}/.browseruse"
 EXT_DIR="${INSTALL_DIR}/extension"
 SERVER_DIR="${INSTALL_DIR}/mcp-server"
-TOKEN_FILE="${INSTALL_DIR}/token"
 
 _note()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 _warn()  { printf '\033[1;33m!! \033[0m %s\n' "$*" >&2; }
@@ -36,7 +37,7 @@ if [ "$NODE_MAJOR" -lt 20 ]; then
   _die "Node 20+ required (found $(node -v)). Upgrade and re-run."
 fi
 
-# --- Resolve latest version ---------------------------------------------------
+# --- Resolve latest version --------------------------------------------------
 # /releases/latest redirects to /releases/tag/vX.Y.Z — no API, no auth, no rate limit.
 _note "Looking up latest BrowserUse release..."
 LATEST_URL="$(curl -fsSI "https://github.com/${REPO}/releases/latest" 2>/dev/null \
@@ -73,22 +74,6 @@ rm -rf "$SERVER_DIR"
 mkdir -p "$SERVER_DIR"
 tar -xzf "${TMP}/mcp-server.tgz" -C "$SERVER_DIR"
 
-# --- Token -------------------------------------------------------------------
-if [ -f "$TOKEN_FILE" ] && [ "${BROWSERUSE_REINIT:-0}" != "1" ]; then
-  _note "Keeping existing auth token at $TOKEN_FILE (set BROWSERUSE_REINIT=1 to regenerate)."
-  TOKEN="$(cat "$TOKEN_FILE")"
-else
-  _note "Generating a new auth token at $TOKEN_FILE"
-  if command -v openssl >/dev/null 2>&1; then
-    TOKEN="$(openssl rand -hex 24)"
-  else
-    TOKEN="$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')"
-  fi
-  umask 077
-  printf '%s' "$TOKEN" > "$TOKEN_FILE"
-fi
-chmod 600 "$TOKEN_FILE"
-
 # --- Register with Claude Code ----------------------------------------------
 ENTRY="${SERVER_DIR}/dist/index.cjs"
 if [ ! -f "$ENTRY" ]; then
@@ -98,12 +83,10 @@ fi
 if command -v claude >/dev/null 2>&1; then
   _note "Registering MCP server with Claude Code (user scope)..."
   if claude mcp list 2>/dev/null | grep -q '^browseruse'; then
-    _note "Existing 'browseruse' MCP entry found — removing so we can re-add with the current token."
+    _note "Existing 'browseruse' MCP entry found — removing and re-adding."
     claude mcp remove browseruse --scope user >/dev/null 2>&1 || true
   fi
-  claude mcp add browseruse --scope user \
-    --env "BROWSERUSE_TOKEN=${TOKEN}" \
-    -- node "$ENTRY"
+  claude mcp add browseruse --scope user -- node "$ENTRY"
   CLAUDE_STATUS="registered"
 else
   _warn "'claude' CLI not found on PATH. Add this manually to ~/.claude/settings.json:"
@@ -113,8 +96,7 @@ else
   "mcpServers": {
     "browseruse": {
       "command": "node",
-      "args": ["${ENTRY}"],
-      "env": { "BROWSERUSE_TOKEN": "${TOKEN}" }
+      "args": ["${ENTRY}"]
     }
   }
 }
@@ -132,7 +114,6 @@ cat <<EOF
 
   Extension:   ${EXT_DIR}
   MCP server:  ${ENTRY}
-  Auth token:  ${TOKEN_FILE}   (mode 0600)
 
   Next steps:
 
@@ -141,12 +122,14 @@ cat <<EOF
   3. Click "Load unpacked" and select:
        ${EXT_DIR}
   4. Pin the BrowserUse toolbar icon (puzzle-piece menu → pin)
-  5. Click the icon, paste this token, Save:
-
-       ${TOKEN}
-
-  6. Start Claude Code and try:
+  5. Start Claude Code and try:
        "open https://example.com in a new tab and tell me the title"
+
+  Pairing is automatic — the extension and MCP server derive a matching
+  token and port from your timezone + OS. No paste needed. If you ever
+  need to override (port conflict, multi-user workstation), set
+  BROWSERUSE_TOKEN / BROWSERUSE_PORT on the server and paste matching
+  values in the extension popup's advanced section.
 
 EOF
 

@@ -7,6 +7,10 @@ import {
   PageHoverParamsSchema,
   PagePressKeyParamsSchema,
   PageFillFormParamsSchema,
+  PageHandleDialogParamsSchema,
+  PageSelectParamsSchema,
+  PageUploadFileParamsSchema,
+  PageDragParamsSchema,
 } from "@browseruse/shared";
 import { resolveUid } from "../lib/snapshot-manager.js";
 import { takeA11ySnapshot } from "./page-read.js";
@@ -281,5 +285,107 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     }
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, filledCount: filled, snapshot };
+  });
+
+  d.register("page.handleDialog", async (raw) => {
+    const p = PageHandleDialogParamsSchema.parse(raw);
+    const pending = mgr.getPendingDialog(p.tabId);
+    if (!pending) {
+      // No dialog open — nothing to do. Report it honestly rather than throwing.
+      return { ok: true as const, handled: false };
+    }
+    const payload: Record<string, unknown> = { accept: p.action === "accept" };
+    if (p.promptText !== undefined) payload.promptText = p.promptText;
+    await mgr.sendCommand(p.tabId, "Page.handleJavaScriptDialog", payload);
+    mgr.clearPendingDialog(p.tabId);
+    return {
+      ok: true as const,
+      handled: true,
+      dialogType: pending.type,
+      dialogMessage: pending.message,
+    };
+  });
+
+  d.register("page.select", async (raw) => {
+    const p = PageSelectParamsSchema.parse(raw);
+    const el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
+    // Set selected options by value-or-text match. Dispatch change/input events.
+    const result = await mgr.sendCommand<{ result: { value: string[] } }>(
+      p.tabId,
+      "Runtime.callFunctionOn",
+      {
+        objectId: el.objectId,
+        functionDeclaration: `function(values) {
+          if (this.tagName !== 'SELECT') {
+            throw new Error('page.select target is not a <select> element: ' + this.tagName);
+          }
+          const wanted = new Set(values);
+          const picked = [];
+          for (const opt of this.options) {
+            const match = wanted.has(opt.value) || wanted.has(opt.label) || wanted.has(opt.textContent?.trim() ?? '');
+            opt.selected = match;
+            if (match) picked.push(opt.value);
+          }
+          this.dispatchEvent(new Event('input', { bubbles: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true }));
+          return picked;
+        }`,
+        arguments: [{ value: p.values }],
+        returnByValue: true,
+      },
+    );
+    const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
+    return { ok: true as const, selected: result.result.value ?? [], snapshot };
+  });
+
+  d.register("page.uploadFile", async (raw) => {
+    const p = PageUploadFileParamsSchema.parse(raw);
+    const el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
+    await mgr.sendCommand(p.tabId, "DOM.setFileInputFiles", {
+      files: p.filePaths,
+      objectId: el.objectId,
+    });
+    // Dispatch input/change so frameworks notice the file list changed.
+    await mgr.sendCommand(p.tabId, "Runtime.callFunctionOn", {
+      objectId: el.objectId,
+      functionDeclaration: `function() {
+        this.dispatchEvent(new Event('input', { bubbles: true }));
+        this.dispatchEvent(new Event('change', { bubbles: true }));
+      }`,
+      returnByValue: true,
+    });
+    const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
+    return { ok: true as const, uploadedCount: p.filePaths.length, snapshot };
+  });
+
+  d.register("page.drag", async (raw) => {
+    const p = PageDragParamsSchema.parse(raw);
+    const from = await resolveElement(mgr, p.tabId, p.fromUid, p.fromSelector);
+    const to = await resolveElement(mgr, p.tabId, p.toUid, p.toSelector);
+    const fromC = await getElementCenter(mgr, p.tabId, from.objectId);
+    const toC = await getElementCenter(mgr, p.tabId, to.objectId);
+    const targetX = toC.x + (p.toOffsetX ?? 0);
+    const targetY = toC.y + (p.toOffsetY ?? 0);
+
+    // Press at source.
+    await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x: fromC.x, y: fromC.y, button: "left", buttons: 1, clickCount: 1,
+    });
+    // Move in steps (HTML5 drag needs multiple move events between press and release).
+    for (let i = 1; i <= p.steps; i++) {
+      const t = i / p.steps;
+      const x = fromC.x + (targetX - fromC.x) * t;
+      const y = fromC.y + (targetY - fromC.y) * t;
+      await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
+        type: "mouseMoved", x, y, button: "left", buttons: 1,
+      });
+    }
+    // Release at target.
+    await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x: targetX, y: targetY, button: "left", buttons: 0, clickCount: 1,
+    });
+
+    const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
+    return { ok: true as const, snapshot };
   });
 }

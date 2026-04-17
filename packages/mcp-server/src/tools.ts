@@ -13,6 +13,10 @@ import {
   PageHoverParamsSchema,
   PagePressKeyParamsSchema,
   PageFillFormParamsSchema,
+  PageHandleDialogParamsSchema,
+  PageSelectParamsSchema,
+  PageUploadFileParamsSchema,
+  PageDragParamsSchema,
   SessionReleaseParamsSchema,
   PageEvalJsParamsSchema,
   ConsoleReadParamsSchema,
@@ -202,6 +206,54 @@ export function buildTools(bridge: BridgeServer) {
     },
   };
 
+  const page_handle_dialog: Tool<z.infer<typeof PageHandleDialogParamsSchema>> = {
+    description:
+      "Handle a JavaScript dialog (alert/confirm/prompt/beforeunload) that is currently open in the tab. action='accept' clicks OK, action='dismiss' clicks Cancel. For prompts, set promptText to the value to enter. If no dialog is open, returns handled=false.",
+    inputSchema: PageHandleDialogParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageHandleDialogParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.handleDialog", parsed));
+    },
+  };
+
+  const page_select: Tool<z.infer<typeof PageSelectParamsSchema>> = {
+    description:
+      "Select one or more options in a <select> dropdown by uid (from a snapshot) or CSS selector. Matches values against option value, label, or visible text. Dispatches input and change events.",
+    inputSchema: PageSelectParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageSelectParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.select", parsed));
+    },
+  };
+
+  const page_upload_file: Tool<z.infer<typeof PageUploadFileParamsSchema>> = {
+    description:
+      "Upload one or more files to a <input type=file> by uid (from a snapshot) or CSS selector. filePaths must be absolute paths on the user's machine that Chrome can read.",
+    inputSchema: PageUploadFileParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageUploadFileParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.uploadFile", parsed));
+    },
+  };
+
+  const page_drag: Tool<z.infer<typeof PageDragParamsSchema>> = {
+    description:
+      "Drag one element onto another. Source and target identified by uid (from a snapshot) or CSS selector. Useful for Trello/Jira/Notion-style drag-and-drop. Optional toOffsetX/toOffsetY shift the drop point relative to the target's centre.",
+    inputSchema: PageDragParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageDragParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.drag", parsed));
+    },
+  };
+
   const page_eval_js: Tool<z.infer<typeof PageEvalJsParamsSchema>> = {
     description:
       "Evaluate a JavaScript expression in a tab's context. Use as an escape hatch when other tools don't cover your needs. If tabId is omitted, reads the active tab.",
@@ -237,6 +289,7 @@ export function buildTools(bridge: BridgeServer) {
     page_navigate, page_snapshot, page_screenshot,
     page_click, page_type, page_scroll,
     page_hover, page_press_key, page_fill_form,
+    page_handle_dialog, page_select, page_upload_file, page_drag,
     session_release,
     page_eval_js, console_read, network_read,
   };

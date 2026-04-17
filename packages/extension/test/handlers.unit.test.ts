@@ -77,9 +77,17 @@ function fakeChrome() {
       detach: vi.fn(async ({ tabId }: { tabId: number }) => { state.debuggerState.attached.delete(tabId); }),
       sendCommand: vi.fn(async (_target: any, method: string, params: any) => {
         state.debuggerState.commands.push({ method, params });
-        if (method === "Runtime.enable" || method === "Network.enable" || method === "Accessibility.enable") return {};
+        if (method === "Runtime.enable" || method === "Network.enable" || method === "Accessibility.enable" || method === "Page.enable") return {};
         if (method === "Runtime.evaluate") return { result: { type: "string", value: "ok" } };
-        if (method === "Runtime.callFunctionOn") return { result: { type: "undefined" } };
+        if (method === "Runtime.callFunctionOn") {
+          // page.select uses returnByValue to return the picked values array.
+          if (params?.functionDeclaration?.includes("page.select target") || params?.functionDeclaration?.includes("picked")) {
+            return { result: { type: "object", value: ["opt1"] } };
+          }
+          return { result: { type: "undefined" } };
+        }
+        if (method === "Page.handleJavaScriptDialog") return {};
+        if (method === "DOM.setFileInputFiles") return {};
         if (method === "Accessibility.getFullAXTree") {
           return {
             nodes: [
@@ -358,5 +366,61 @@ describe("handlers", () => {
 
     const badge = (globalThis as any).chrome.action.setBadgeText as ReturnType<typeof vi.fn>;
     expect(badge).toHaveBeenCalledWith(expect.objectContaining({ tabId: 1, text: "●" }));
+  });
+
+  // --- page.handleDialog ---
+  it("page.handleDialog returns handled=false when no dialog pending", async () => {
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 200, method: "page.handleDialog",
+      params: { tabId: 1, action: "accept" },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    expect((resp.result as any).handled).toBe(false);
+  });
+
+  // --- page.select ---
+  it("page.select calls Runtime.callFunctionOn on a resolved element", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 210, method: "page.select",
+      params: { tabId: 1, uid: uids[0], values: ["opt1"] },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const fnCalls = state.debuggerState.commands.filter((c: any) => c.method === "Runtime.callFunctionOn");
+    expect(fnCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // --- page.uploadFile ---
+  it("page.uploadFile calls DOM.setFileInputFiles with the given paths", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 220, method: "page.uploadFile",
+      params: { tabId: 1, uid: uids[0], filePaths: ["/tmp/a.png"] },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    expect((resp.result as any).uploadedCount).toBe(1);
+    const sffiCalls = state.debuggerState.commands.filter((c: any) => c.method === "DOM.setFileInputFiles");
+    expect(sffiCalls.length).toBe(1);
+    expect(sffiCalls[0].params.files).toEqual(["/tmp/a.png"]);
+  });
+
+  // --- page.drag ---
+  it("page.drag dispatches press + moves + release mouse events", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 230, method: "page.drag",
+      params: { tabId: 1, fromUid: uids[0], toUid: uids[1], steps: 5 },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const mouseEvents = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchMouseEvent");
+    const pressed = mouseEvents.filter((c: any) => c.params.type === "mousePressed");
+    const moved = mouseEvents.filter((c: any) => c.params.type === "mouseMoved");
+    const released = mouseEvents.filter((c: any) => c.params.type === "mouseReleased");
+    expect(pressed.length).toBe(1);
+    expect(moved.length).toBe(5);
+    expect(released.length).toBe(1);
   });
 });

@@ -44,11 +44,19 @@ export class RingBuffer<T extends { ts: number }> {
 
 type InflightRequest = { start: number; method: string; url: string; type: string };
 
+export interface PendingDialog {
+  type: string;        // "alert" | "confirm" | "prompt" | "beforeunload"
+  message: string;
+  defaultPrompt?: string;
+  url?: string;
+}
+
 export class DebuggerManager {
   private consoles = new Map<number, RingBuffer<ConsoleEntry>>();
   private networks = new Map<number, RingBuffer<NetworkEntry>>();
   private attached = new Set<number>();
   private inflight = new Map<string, InflightRequest>();
+  private pendingDialogs = new Map<number, PendingDialog>();
 
   constructor() {
     chrome.tabs.onRemoved.addListener((tabId) => { void this.detach(tabId); });
@@ -58,7 +66,8 @@ export class DebuggerManager {
     chrome.debugger.onDetach.addListener((source) => {
       if (source.tabId !== undefined) {
         this.attached.delete(source.tabId);
-        // Keep buffers — user may still want to read history post-detach; next attach resets them.
+        this.pendingDialogs.delete(source.tabId);
+        // Keep console/network buffers — user may still want to read history post-detach; next attach resets them.
       }
     });
   }
@@ -68,6 +77,7 @@ export class DebuggerManager {
     await chrome.debugger.attach({ tabId }, "1.3");
     await chrome.debugger.sendCommand({ tabId }, "Runtime.enable");
     await chrome.debugger.sendCommand({ tabId }, "Network.enable");
+    await chrome.debugger.sendCommand({ tabId }, "Page.enable");
     this.consoles.set(tabId, new RingBuffer());
     this.networks.set(tabId, new RingBuffer());
     this.attached.add(tabId);
@@ -79,6 +89,17 @@ export class DebuggerManager {
     this.attached.delete(tabId);
     this.consoles.delete(tabId);
     this.networks.delete(tabId);
+    this.pendingDialogs.delete(tabId);
+  }
+
+  /** Return the currently-open JS dialog for a tab, if any. */
+  getPendingDialog(tabId: number): PendingDialog | undefined {
+    return this.pendingDialogs.get(tabId);
+  }
+
+  /** Clear the pending-dialog record for a tab (called after handling). */
+  clearPendingDialog(tabId: number): void {
+    this.pendingDialogs.delete(tabId);
   }
 
   async sendCommand<T = unknown>(tabId: number, method: string, params: unknown): Promise<T> {
@@ -146,6 +167,15 @@ export class DebuggerManager {
         });
         this.inflight.delete(params.requestId as string);
       }
+    } else if (method === "Page.javascriptDialogOpening") {
+      this.pendingDialogs.set(tabId, {
+        type: String(params.type ?? "alert"),
+        message: String(params.message ?? ""),
+        defaultPrompt: params.defaultPrompt as string | undefined,
+        url: params.url as string | undefined,
+      });
+    } else if (method === "Page.javascriptDialogClosed") {
+      this.pendingDialogs.delete(tabId);
     }
   }
 }

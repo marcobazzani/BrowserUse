@@ -7,13 +7,23 @@
   <body>
     <h1>BrowserUse</h1>
     <p id="status">loading…</p>
-    <label>Port:
-      <input id="port" type="number" min="1" max="65535" step="1" placeholder="59321" />
-    </label>
-    <label>Paste token from MCP server:
-      <input id="token" type="text" placeholder="..." />
-    </label>
-    <button id="save">Save</button>
+    <p id="pairing" class="hint"></p>
+    <details>
+      <summary>Advanced — override pairing</summary>
+      <p class="hint">
+        Token and port are normally derived automatically and match the MCP server.
+        Only fill these in if you've set <code>BROWSERUSE_TOKEN</code> or
+        <code>BROWSERUSE_PORT</code> on the server side.
+      </p>
+      <label>Port:
+        <input id="port" type="number" min="1" max="65535" step="1" placeholder="auto" />
+      </label>
+      <label>Token:
+        <input id="token" type="text" placeholder="auto" />
+      </label>
+      <button id="save">Save override</button>
+      <button id="clear" type="button">Clear override</button>
+    </details>
     <script type="module" src="./popup.js"></script>
   </body>
 </html>

@@ -15,6 +15,10 @@ import {
   PageHoverParamsSchema,
   PagePressKeyParamsSchema,
   PageFillFormParamsSchema,
+  PageHandleDialogParamsSchema,
+  PageSelectParamsSchema,
+  PageUploadFileParamsSchema,
+  PageDragParamsSchema,
   PageEvalJsParamsSchema,
   ConsoleReadParamsSchema,
   ConsoleReadResultSchema,
@@ -269,5 +273,56 @@ describe("protocol round-trip", () => {
   it("network.read accepts optional status and durationMs", () => {
     const r = [{ ts: 1, method: "GET", url: "https://a", type: "Document" }];
     expect(NetworkReadResultSchema.parse(r)).toEqual(r);
+  });
+
+  // --- handle_dialog ---
+  it("page.handleDialog defaults action=accept", () => {
+    const p = PageHandleDialogParamsSchema.parse({ tabId: 1 });
+    expect(p.action).toBe("accept");
+  });
+  it("page.handleDialog accepts promptText for prompt dialogs", () => {
+    const p = PageHandleDialogParamsSchema.parse({ tabId: 1, action: "accept", promptText: "yes" });
+    expect(p.promptText).toBe("yes");
+  });
+  it("page.handleDialog rejects invalid action", () => {
+    expect(() => PageHandleDialogParamsSchema.parse({ tabId: 1, action: "maybe" })).toThrow();
+  });
+
+  // --- select ---
+  it("page.select accepts uid + values", () => {
+    const p = PageSelectParamsSchema.parse({ tabId: 1, uid: "e5", values: ["opt1"] });
+    expect(p.values).toEqual(["opt1"]);
+  });
+  it("page.select rejects missing target", () => {
+    expect(() => PageSelectParamsSchema.parse({ tabId: 1, values: ["opt1"] })).toThrow();
+  });
+  it("page.select rejects empty values", () => {
+    expect(() => PageSelectParamsSchema.parse({ tabId: 1, uid: "e5", values: [] })).toThrow();
+  });
+
+  // --- upload_file ---
+  it("page.uploadFile accepts selector + filePaths", () => {
+    const p = PageUploadFileParamsSchema.parse({ tabId: 1, selector: "#file", filePaths: ["/tmp/a.png"] });
+    expect(p.filePaths).toHaveLength(1);
+  });
+  it("page.uploadFile rejects empty filePaths", () => {
+    expect(() => PageUploadFileParamsSchema.parse({ tabId: 1, uid: "e1", filePaths: [] })).toThrow();
+  });
+
+  // --- drag ---
+  it("page.drag accepts fromUid + toUid", () => {
+    const p = PageDragParamsSchema.parse({ tabId: 1, fromUid: "e1", toUid: "e2" });
+    expect(p.fromUid).toBe("e1");
+    expect(p.toUid).toBe("e2");
+    expect(p.steps).toBe(10);
+  });
+  it("page.drag rejects missing from target", () => {
+    expect(() => PageDragParamsSchema.parse({ tabId: 1, toUid: "e2" })).toThrow();
+  });
+  it("page.drag rejects missing to target", () => {
+    expect(() => PageDragParamsSchema.parse({ tabId: 1, fromUid: "e1" })).toThrow();
+  });
+  it("page.drag rejects steps over 50", () => {
+    expect(() => PageDragParamsSchema.parse({ tabId: 1, fromUid: "e1", toUid: "e2", steps: 100 })).toThrow();
   });
 });

@@ -218,6 +218,104 @@ export const PageFillFormResultSchema = z.object({
   snapshot: z.string().optional(),
 }).strict();
 
+/* ---------- Dialog handling ---------- */
+
+export const PageHandleDialogParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    action: z.enum(["accept", "dismiss"]).default("accept"),
+    promptText: z.string().optional(),
+  })
+  .strict();
+export const PageHandleDialogResultSchema = z
+  .object({
+    ok: z.literal(true),
+    handled: z.boolean(),
+    dialogType: z.string().optional(),
+    dialogMessage: z.string().optional(),
+  })
+  .strict();
+
+/* ---------- Select (dropdown) ---------- */
+
+export const PageSelectParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    uid: z.string().min(1).optional(),
+    selector: z.string().min(1).optional(),
+    // pick the option whose value OR visible text matches one of these strings
+    values: z.array(z.string()).min(1),
+    includeSnapshot: z.boolean().default(false),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (!v.uid && !v.selector) {
+      ctx.addIssue({ code: "custom", message: "provide either uid or selector" });
+    }
+  });
+export const PageSelectResultSchema = z
+  .object({
+    ok: z.literal(true),
+    selected: z.array(z.string()),
+    snapshot: z.string().optional(),
+  })
+  .strict();
+
+/* ---------- Upload file ---------- */
+
+export const PageUploadFileParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    uid: z.string().min(1).optional(),
+    selector: z.string().min(1).optional(),
+    filePaths: z.array(z.string().min(1)).min(1),
+    includeSnapshot: z.boolean().default(false),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (!v.uid && !v.selector) {
+      ctx.addIssue({ code: "custom", message: "provide either uid or selector" });
+    }
+  });
+export const PageUploadFileResultSchema = z
+  .object({
+    ok: z.literal(true),
+    uploadedCount: z.number().int(),
+    snapshot: z.string().optional(),
+  })
+  .strict();
+
+/* ---------- Drag ---------- */
+
+export const PageDragParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    fromUid: z.string().min(1).optional(),
+    fromSelector: z.string().min(1).optional(),
+    toUid: z.string().min(1).optional(),
+    toSelector: z.string().min(1).optional(),
+    // offset applied to the target centre (useful for drop zones that only accept a specific region)
+    toOffsetX: z.number().optional(),
+    toOffsetY: z.number().optional(),
+    steps: z.number().int().min(1).max(50).default(10),
+    includeSnapshot: z.boolean().default(false),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (!v.fromUid && !v.fromSelector) {
+      ctx.addIssue({ code: "custom", message: "provide fromUid or fromSelector" });
+    }
+    if (!v.toUid && !v.toSelector) {
+      ctx.addIssue({ code: "custom", message: "provide toUid or toSelector" });
+    }
+  });
+export const PageDragResultSchema = z
+  .object({
+    ok: z.literal(true),
+    snapshot: z.string().optional(),
+  })
+  .strict();
+
 /* ---------- Escape hatch & logs ---------- */
 
 export const PageEvalJsParamsSchema = z.object({
@@ -280,6 +378,10 @@ export const METHODS = {
   "page.hover":      { params: PageHoverParamsSchema,      result: PageHoverResultSchema },
   "page.pressKey":   { params: PagePressKeyParamsSchema,   result: PagePressKeyResultSchema },
   "page.fillForm":   { params: PageFillFormParamsSchema,   result: PageFillFormResultSchema },
+  "page.handleDialog": { params: PageHandleDialogParamsSchema, result: PageHandleDialogResultSchema },
+  "page.select":     { params: PageSelectParamsSchema,     result: PageSelectResultSchema },
+  "page.uploadFile": { params: PageUploadFileParamsSchema, result: PageUploadFileResultSchema },
+  "page.drag":       { params: PageDragParamsSchema,       result: PageDragResultSchema },
   "page.evalJs":     { params: PageEvalJsParamsSchema,     result: PageEvalJsResultSchema },
   "console.read":    { params: ConsoleReadParamsSchema,    result: ConsoleReadResultSchema },
   "network.read":    { params: NetworkReadParamsSchema,    result: NetworkReadResultSchema },

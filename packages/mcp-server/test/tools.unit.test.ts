@@ -23,6 +23,10 @@ const fakeBridge = () => {
         if (method === "page.hover")      return { ok: true };
         if (method === "page.pressKey")   return { ok: true };
         if (method === "page.fillForm")   return { ok: true, filledCount: 2 };
+        if (method === "page.handleDialog") return { ok: true, handled: true, dialogType: "alert", dialogMessage: "hi" };
+        if (method === "page.select")     return { ok: true, selected: ["opt1"] };
+        if (method === "page.uploadFile") return { ok: true, uploadedCount: 1 };
+        if (method === "page.drag")       return { ok: true };
         if (method === "page.evalJs")    return { type: "string", value: "hi" };
         if (method === "console.read")   return [{ ts: 1, level: "error", text: "boom" }];
         if (method === "network.read")   return [{ ts: 1, method: "GET", url: "https://a", type: "Document", status: 200, durationMs: 12 }];
@@ -221,5 +225,39 @@ describe("tool adapters", () => {
     const result = await tools.console_read.handler({ tabId: 7 });
     const parsed = JSON.parse((result.content[0] as any).text);
     expect(parsed).toEqual([{ ts: 1, level: "error", text: "boom" }]);
+  });
+
+  it("page_handle_dialog auto-claims and forwards action+promptText", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_handle_dialog.handler({ tabId: 7, action: "accept", promptText: "yes" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.handleDialog"]);
+    expect((calls[1]!.params as any).action).toBe("accept");
+    expect((calls[1]!.params as any).promptText).toBe("yes");
+  });
+
+  it("page_select auto-claims and forwards values", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_select.handler({ tabId: 7, uid: "e5", values: ["opt1"] });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.select"]);
+    expect((calls[1]!.params as any).values).toEqual(["opt1"]);
+  });
+
+  it("page_upload_file auto-claims and forwards filePaths", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_upload_file.handler({ tabId: 7, uid: "e5", filePaths: ["/tmp/a.png"] });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.uploadFile"]);
+    expect((calls[1]!.params as any).filePaths).toEqual(["/tmp/a.png"]);
+  });
+
+  it("page_drag auto-claims and forwards both endpoints", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_drag.handler({ tabId: 7, fromUid: "e1", toUid: "e2" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.drag"]);
+    expect((calls[1]!.params as any).fromUid).toBe("e1");
+    expect((calls[1]!.params as any).toUid).toBe("e2");
   });
 });
