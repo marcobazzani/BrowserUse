@@ -21,7 +21,6 @@ Every interactive tool auto-claims its target tab: the tab is put into a distinc
 - Node 20+
 - A Chromium-based browser (Chrome, Edge, Brave, Arc) — 116+
 - Claude Code (or any MCP-capable client)
-- **Contributors only:** pnpm 9.x (`npm install -g pnpm@9`)
 
 ## Quickstart (users)
 
@@ -33,46 +32,12 @@ curl -fsSL https://raw.githubusercontent.com/marcobazzani/BrowserUse/main/script
 
 Then follow the printed instructions (load unpacked extension + paste token). Set `BROWSERUSE_REINIT=1` before the command if you want to regenerate the token.
 
-**Windows:** use WSL for the installer, or do it by hand — download the latest `browseruse-extension-*.zip` + `browseruse-mcp-server-*.tgz` from [Releases](https://github.com/marcobazzani/BrowserUse/releases), unpack to `%USERPROFILE%\.browseruse\`, then follow the [manual Claude Code registration](#register-with-claude-code-manually) below.
+**Windows:** use WSL for the installer, or do it by hand — download the latest `browseruse-extension-*.zip` + `browseruse-mcp-server-*.tgz` from [Releases](https://github.com/marcobazzani/BrowserUse/releases), unpack to `%USERPROFILE%\.browseruse\`, then register the MCP server per the installer's printed instructions.
 
 **Uninstall:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/marcobazzani/BrowserUse/main/scripts/uninstall.sh | bash
 ```
-
-## Quickstart (contributors / from source)
-
-```bash
-git clone https://github.com/marcobazzani/BrowserUse && cd BrowserUse
-pnpm install && pnpm build
-export BROWSERUSE_TOKEN=$(openssl rand -hex 24)
-claude mcp add browseruse --scope user \
-  --env "BROWSERUSE_TOKEN=$BROWSERUSE_TOKEN" \
-  -- node "$(pwd)/packages/mcp-server/dist/index.js"
-```
-
-Load unpacked from `packages/extension/dist`, paste `$BROWSERUSE_TOKEN` into the popup, Save.
-
-### Register with Claude Code manually
-
-If the installer can't call `claude` (e.g. `claude` isn't on PATH), add this to `~/.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "browseruse": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-server/dist/index.js"],
-      "env": { "BROWSERUSE_TOKEN": "<your-token>" }
-    }
-  }
-}
-```
-
-> **Developer note:** opt in to the pre-commit unit-test hook with:
-> ```bash
-> git config core.hooksPath .githooks
-> ```
 
 ## Testing
 
