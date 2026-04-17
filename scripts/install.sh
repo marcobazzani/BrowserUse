@@ -90,7 +90,7 @@ fi
 chmod 600 "$TOKEN_FILE"
 
 # --- Register with Claude Code ----------------------------------------------
-ENTRY="${SERVER_DIR}/dist/index.js"
+ENTRY="${SERVER_DIR}/dist/index.cjs"
 if [ ! -f "$ENTRY" ]; then
   _die "MCP server entrypoint not found at $ENTRY — release archive layout may have changed."
 fi

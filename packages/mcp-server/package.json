@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "browseruse-mcp": "./dist/index.js" },
+  "bin": { "browseruse-mcp": "./dist/index.cjs" },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --clean --out-dir dist --target node20",
-    "dev": "tsup src/index.ts --format esm --dts --watch --out-dir dist --target node20",
+    "build": "tsup",
+    "dev": "tsup --watch",
     "test": "vitest run",
     "test:unit": "vitest run test/*.unit.test.ts",
     "test:integration": "vitest run test/*.integration.test.ts",
