@@ -39,35 +39,7 @@ Then follow the printed instructions (load unpacked extension + paste token). Se
 curl -fsSL https://raw.githubusercontent.com/marcobazzani/BrowserUse/main/scripts/uninstall.sh | bash
 ```
 
-## Testing
-
-Unit and integration tests are non-negotiable per [CLAUDE.md](./CLAUDE.md):
-
-```bash
-pnpm test:unit          # fast, always runs
-pnpm test:integration   # in-process bridge tests; extension e2e only when BROWSERUSE_E2E=1
-```
-
-The Playwright end-to-end test (extension in real Chromium ↔ real MCP server) is gated:
-
-```bash
-pnpm -F @browseruse/extension exec playwright install chromium
-BROWSERUSE_E2E=1 pnpm -F @browseruse/extension test:integration
-```
-
-## Repository layout
-
-```
-BrowserUse/
-├── packages/
-│   ├── shared/       # Zod wire protocol (single source of truth)
-│   ├── mcp-server/   # stdio MCP server + WebSocket bridge + tool adapters
-│   └── extension/    # Chrome MV3 extension (service worker, handlers, popup, overlay)
-├── docs/superpowers/plans/   # implementation plans
-└── CLAUDE.md                 # engineering guardrails
-```
-
-## Privacy / data-residency sanity check
+## Privacy / data-residency
 
 The MCP server binds loopback only and never makes outbound network calls — LLM traffic goes directly from Claude Code to whichever backend you've configured. Verify:
 
