@@ -36,19 +36,19 @@ if [ "$NODE_MAJOR" -lt 20 ]; then
   _die "Node 20+ required (found $(node -v)). Upgrade and re-run."
 fi
 
-# --- Fetch latest release metadata ------------------------------------------
-_note "Looking up latest BrowserUse release on GitHub..."
-META="$(curl -fsSL -H 'Accept: application/vnd.github+json' \
-  "https://api.github.com/repos/${REPO}/releases/latest" \
-  || _die "Could not contact GitHub. Are you online?")"
+# --- Resolve latest version ---------------------------------------------------
+# /releases/latest redirects to /releases/tag/vX.Y.Z — no API, no auth, no rate limit.
+_note "Looking up latest BrowserUse release..."
+LATEST_URL="$(curl -fsSI "https://github.com/${REPO}/releases/latest" 2>/dev/null \
+  | sed -n 's#^[Ll]ocation: *\(.*\)#\1#p' | tr -d '\r' | tail -n1)"
+TAG="$(printf '%s' "$LATEST_URL" | sed 's#.*/tag/##')"
 
-TAG="$(printf '%s' "$META" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
-EXT_URL="$(printf '%s' "$META" | sed -n 's#.*"browser_download_url": *"\(https://[^"]*browseruse-extension-[^"]*\.zip\)".*#\1#p' | head -n1)"
-SRV_URL="$(printf '%s' "$META" | sed -n 's#.*"browser_download_url": *"\(https://[^"]*browseruse-mcp-server-[^"]*\.tgz\)".*#\1#p' | head -n1)"
-
-if [ -z "${TAG:-}" ] || [ -z "${EXT_URL:-}" ] || [ -z "${SRV_URL:-}" ]; then
-  _die "No published release found yet. Push a tag 'vX.Y.Z' to trigger the release workflow, then re-run the installer."
+if [ -z "${TAG:-}" ]; then
+  _die "Could not resolve latest release. Check your network and try again."
 fi
+
+EXT_URL="https://github.com/${REPO}/releases/download/${TAG}/browseruse-extension-${TAG}.zip"
+SRV_URL="https://github.com/${REPO}/releases/download/${TAG}/browseruse-mcp-server-${TAG}.tgz"
 
 _note "Installing ${REPO} ${TAG}"
 
