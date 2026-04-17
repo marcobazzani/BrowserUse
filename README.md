@@ -6,13 +6,15 @@ Lets Claude Code drive your real, logged-in Chrome via a local MCP server + MV3 
 
 ## What you get
 
-MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket (token-authed). Current set (v0.3.0):
+MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket (token-authed). Current set (v0.4.0, 17 tools):
 
 - **Tabs:** `tabs_list`, `tabs_create`, `tabs_close`, `tabs_activate`
-- **Navigation & read:** `page_navigate`, `page_snapshot` (text / dom / a11y), `page_screenshot`
-- **Interact:** `page_click`, `page_type`, `page_scroll`
+- **Navigation & read:** `page_navigate`, `page_snapshot` (uid-annotated a11y tree / text / dom), `page_screenshot`
+- **Interact:** `page_click`, `page_type`, `page_hover`, `page_press_key`, `page_scroll`, `page_fill_form`
 - **Escape hatch & logs:** `page_eval_js`, `console_read`, `network_read`
 - **Session:** `session_release`
+
+The default `page_snapshot` mode returns a **CDP accessibility tree with stable uids** — each interactive element gets a `[uid]` you pass directly to click/type/hover. No CSS selector guessing. All interaction tools support `includeSnapshot=true` to get an updated tree in the response, reducing round-trips.
 
 Every interactive tool auto-claims its target tab: the tab is put into a distinct orange **"Claude"** tab group and gets an amber pulsing border + "Claude is using this tab" pill — so you always know when the agent is driving.
 

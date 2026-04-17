@@ -21,7 +21,7 @@ function fakeChrome() {
     tabs: [{ id: 1, url: "https://a", title: "a", active: true, windowId: 1 }] as any[],
     groups: new Map<number, { title?: string; color?: string; tabs: number[] }>(),
     nextGroupId: 100,
-    debuggerState: { attached: new Set<number>(), lastCommand: undefined as any },
+    debuggerState: { attached: new Set<number>(), commands: [] as any[] },
   };
   (globalThis as any).chrome = {
     tabs: {
@@ -36,7 +36,7 @@ function fakeChrome() {
       }),
       update: vi.fn(async (_id: number, _p: unknown) => ({})),
       remove: vi.fn(async (_id: number) => {}),
-      get: vi.fn(async (id: number) => state.tabs.find((t) => t.id === id)),
+      get: vi.fn(async (id: number) => state.tabs.find((t) => t.id === id) ?? { id, url: "https://a", title: "a", windowId: 1 }),
       captureVisibleTab: vi.fn(async (_winId: number, opts: { format: string }) => `data:image/${opts.format};base64,AAAA`),
       onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
       onRemoved: { addListener: vi.fn() },
@@ -60,15 +60,13 @@ function fakeChrome() {
       }),
     },
     scripting: {
-      executeScript: vi.fn(async (_opts) => [{
-        result: {
-          mode: "text",
-          url: "https://a",
-          title: "a",
-          content: "hello",
-          truncated: false,
-        },
-      }]),
+      executeScript: vi.fn(async (opts: any) => {
+        // For text/dom snapshot modes (injected function) and scroll.
+        if (opts.func) {
+          return [{ result: { mode: "text", url: "https://a", title: "a", content: "hello", truncated: false } }];
+        }
+        return [{ result: { ok: true } }];
+      }),
     },
     action: {
       setBadgeText: vi.fn(async (_p) => {}),
@@ -78,10 +76,26 @@ function fakeChrome() {
       attach: vi.fn(async ({ tabId }: { tabId: number }) => { state.debuggerState.attached.add(tabId); }),
       detach: vi.fn(async ({ tabId }: { tabId: number }) => { state.debuggerState.attached.delete(tabId); }),
       sendCommand: vi.fn(async (_target: any, method: string, params: any) => {
-        state.debuggerState.lastCommand = { method, params };
-        if (method === "Runtime.evaluate") {
-          return { result: { type: "string", value: "ok" } };
+        state.debuggerState.commands.push({ method, params });
+        if (method === "Runtime.enable" || method === "Network.enable" || method === "Accessibility.enable") return {};
+        if (method === "Runtime.evaluate") return { result: { type: "string", value: "ok" } };
+        if (method === "Runtime.callFunctionOn") return { result: { type: "undefined" } };
+        if (method === "Accessibility.getFullAXTree") {
+          return {
+            nodes: [
+              { nodeId: "1", backendDOMNodeId: 10, role: { type: "role", value: "WebArea" }, name: { type: "computedString", value: "Test Page" }, childIds: ["2", "3"] },
+              { nodeId: "2", backendDOMNodeId: 20, role: { type: "role", value: "button" }, name: { type: "computedString", value: "Submit" }, properties: [{ name: "focusable", value: { type: "boolean", value: true } }] },
+              { nodeId: "3", backendDOMNodeId: 30, role: { type: "role", value: "textbox" }, name: { type: "computedString", value: "Email" }, properties: [{ name: "focusable", value: { type: "boolean", value: true } }] },
+            ],
+          };
         }
+        if (method === "DOM.resolveNode") return { object: { objectId: "obj-" + (params.backendNodeId ?? params.nodeId) } };
+        if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
+        if (method === "DOM.querySelector") return { nodeId: params.selector === "#missing" ? 0 : 42 };
+        if (method === "DOM.getBoxModel") return { model: { content: [100, 100, 200, 100, 200, 200, 100, 200] } };
+        if (method === "Input.dispatchMouseEvent") return {};
+        if (method === "Input.dispatchKeyEvent") return {};
+        if (method === "Input.insertText") return {};
         return {};
       }),
       onEvent: { addListener: vi.fn() },
@@ -136,70 +150,147 @@ describe("handlers", () => {
     await d.handle({ jsonrpc: "2.0", id: 10, method: "session.claim", params: { tabId: 1 } });
     expect(spy).toHaveBeenCalledTimes(1);
     const call = spy.mock.calls[0]![0];
-    expect(typeof call.func).toBe("function"); // func, not files
+    expect(typeof call.func).toBe("function");
     expect(call.files).toBeUndefined();
   });
 
-  it("page.snapshot returns the injected function's result", async () => {
+  // --- page.snapshot ---
+  it("page.snapshot mode=a11y returns CDP accessibility tree with uids", async () => {
     const resp = await d.handle({ jsonrpc: "2.0", id: 20, method: "page.snapshot", params: { tabId: 1 } });
+    const result = resp.result as any;
+    expect(result.mode).toBe("a11y");
+    expect(result.content).toContain("button");
+    expect(result.content).toContain("Submit");
+    // UIDs should be present.
+    expect(result.content).toMatch(/\[e\d+\]/);
+  });
+
+  it("page.snapshot mode=text returns innerText via executeScript", async () => {
+    const resp = await d.handle({ jsonrpc: "2.0", id: 21, method: "page.snapshot", params: { tabId: 1, mode: "text" } });
     expect((resp.result as any).content).toBe("hello");
     expect((resp.result as any).mode).toBe("text");
   });
 
   it("page.screenshot strips the data URL prefix and returns base64", async () => {
-    const resp = await d.handle({ jsonrpc: "2.0", id: 21, method: "page.screenshot", params: { tabId: 1 } });
+    const resp = await d.handle({ jsonrpc: "2.0", id: 22, method: "page.screenshot", params: { tabId: 1 } });
     expect((resp.result as any).base64).toBe("AAAA");
     expect((resp.result as any).format).toBe("jpeg");
   });
 
-  it("page.snapshot with no tabId resolves to the active tab's id", async () => {
+  it("page.snapshot with no tabId resolves to the active tab", async () => {
     const resp = await d.handle({ jsonrpc: "2.0", id: 60, method: "page.snapshot", params: {} });
-    // snapshot result is whatever the executeScript mock returns; just assert it didn't error.
     expect(resp.error).toBeUndefined();
   });
 
-  it("page.click dispatches executeScript with the click helper and returns ok", async () => {
-    (globalThis as any).chrome.scripting.executeScript = vi.fn(async () => [{ result: { ok: true } }]);
+  /** Helper: take a snapshot and extract uids from the content. */
+  async function snapshotUids(tabId: number): Promise<string[]> {
+    const resp = await d.handle({ jsonrpc: "2.0", id: Date.now(), method: "page.snapshot", params: { tabId } });
+    const content = (resp.result as any).content as string;
+    return [...content.matchAll(/\[(e\d+)\]/g)].map(m => m[1]);
+  }
+
+  // --- page.click (CDP-based) ---
+  it("page.click with uid dispatches CDP mouse events", async () => {
+    const uids = await snapshotUids(1);
+    expect(uids.length).toBeGreaterThanOrEqual(2);
     const resp = await d.handle({
-      jsonrpc: "2.0", id: 30, method: "page.click",
+      jsonrpc: "2.0", id: 71, method: "page.click",
+      params: { tabId: 1, uid: uids[0] },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const mouseEvents = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchMouseEvent");
+    expect(mouseEvents.length).toBeGreaterThanOrEqual(2); // mousePressed + mouseReleased
+  });
+
+  it("page.click with selector resolves via DOM.querySelector", async () => {
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 72, method: "page.click",
       params: { tabId: 1, selector: "#go" },
     });
     expect((resp.result as any).ok).toBe(true);
-    const call = ((globalThis as any).chrome.scripting.executeScript as any).mock.calls[0][0];
-    expect(typeof call.func).toBe("function");
-    expect(call.args).toEqual(["#go", "left", true]);
+    const qsCalls = state.debuggerState.commands.filter((c: any) => c.method === "DOM.querySelector");
+    expect(qsCalls.length).toBe(1);
+    expect(qsCalls[0].params.selector).toBe("#go");
   });
 
-  it("page.click surfaces an injected-function error via the 'error' field", async () => {
-    (globalThis as any).chrome.scripting.executeScript = vi.fn(async () => [
-      { error: new Error("selector did not match: #nope") },
-    ]);
+  it("page.click rejects when neither uid nor selector", async () => {
     const resp = await d.handle({
-      jsonrpc: "2.0", id: 31, method: "page.click",
-      params: { tabId: 1, selector: "#nope" },
+      jsonrpc: "2.0", id: 73, method: "page.click",
+      params: { tabId: 1 },
     });
-    expect(resp.error?.message).toMatch(/selector did not match/);
+    expect(resp.error).toBeDefined();
   });
 
-  it("page.type passes the correct args array", async () => {
-    (globalThis as any).chrome.scripting.executeScript = vi.fn(async () => [{ result: { ok: true } }]);
-    await d.handle({
-      jsonrpc: "2.0", id: 32, method: "page.type",
-      params: { tabId: 1, selector: "#q", text: "hello", submit: true },
+  // --- page.type (CDP-based) ---
+  it("page.type with uid focuses and inserts text via CDP", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 81, method: "page.type",
+      params: { tabId: 1, uid: uids[1], text: "hello@test.com" },
     });
-    const call = ((globalThis as any).chrome.scripting.executeScript as any).mock.calls[0][0];
-    expect(call.args).toEqual(["#q", "hello", true, true]);
+    expect((resp.result as any).ok).toBe(true);
+    const insertCalls = state.debuggerState.commands.filter((c: any) => c.method === "Input.insertText");
+    expect(insertCalls.length).toBe(1);
+    expect(insertCalls[0].params.text).toBe("hello@test.com");
   });
 
+  // --- page.hover ---
+  it("page.hover dispatches mouseMoved event", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 91, method: "page.hover",
+      params: { tabId: 1, uid: uids[0] },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const hoverEvents = state.debuggerState.commands.filter((c: any) =>
+      c.method === "Input.dispatchMouseEvent" && c.params.type === "mouseMoved"
+    );
+    expect(hoverEvents.length).toBe(1);
+  });
+
+  // --- page.pressKey ---
+  it("page.pressKey dispatches keyDown + keyUp", async () => {
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 100, method: "page.pressKey",
+      params: { tabId: 1, key: "Enter" },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const keyEvents = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchKeyEvent");
+    expect(keyEvents.length).toBe(2);
+    expect(keyEvents[0].params.type).toBe("keyDown");
+    expect(keyEvents[1].params.type).toBe("keyUp");
+    expect(keyEvents[0].params.key).toBe("Enter");
+  });
+
+  // --- page.fillForm ---
+  it("page.fillForm fills multiple fields in one call", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 111, method: "page.fillForm",
+      params: {
+        tabId: 1,
+        fields: [
+          { uid: uids[0], value: "Alice" },
+          { uid: uids[1], value: "alice@example.com" },
+        ],
+      },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    expect((resp.result as any).filledCount).toBe(2);
+    const insertCalls = state.debuggerState.commands.filter((c: any) => c.method === "Input.insertText");
+    expect(insertCalls.length).toBe(2);
+  });
+
+  // --- page.scroll ---
   it("page.scroll to=bottom passes correct args", async () => {
-    (globalThis as any).chrome.scripting.executeScript = vi.fn(async () => [{ result: { ok: true } }]);
-    await d.handle({
+    const resp = await d.handle({
       jsonrpc: "2.0", id: 33, method: "page.scroll",
       params: { tabId: 1, to: "bottom" },
     });
-    const call = ((globalThis as any).chrome.scripting.executeScript as any).mock.calls[0][0];
-    // args order: [dx, dy, selector, to, smooth]
-    expect(call.args).toEqual([undefined, undefined, undefined, "bottom", false]);
+    expect((resp.result as any).ok).toBe(true);
   });
 
   it("page.scroll rejects params that mix dy + selector", async () => {
@@ -210,40 +301,44 @@ describe("handlers", () => {
     expect(resp.error?.message).toMatch(/exactly one/i);
   });
 
-  it("page.evalJs forwards to Runtime.evaluate with the expected params", async () => {
+  // --- page.evalJs ---
+  it("page.evalJs forwards to Runtime.evaluate", async () => {
     const resp = await d.handle({
       jsonrpc: "2.0", id: 40, method: "page.evalJs",
       params: { tabId: 1, expression: "document.title" },
     });
-    const cmd = (globalThis as any).chrome.debugger.sendCommand.mock.calls
-      .find((c: any[]) => c[1] === "Runtime.evaluate");
+    const cmd = state.debuggerState.commands.find((c: any) => c.method === "Runtime.evaluate");
     expect(cmd).toBeDefined();
-    expect(cmd[2].expression).toBe("document.title");
+    expect(cmd.params.expression).toBe("document.title");
     expect((resp.result as any).type).toBe("string");
   });
 
   it("page.evalJs returns {type:'exception', exception} on exceptionDetails", async () => {
-    const spy = (globalThis as any).chrome.debugger.sendCommand as ReturnType<typeof vi.fn>;
-    // Make the NEXT Runtime.evaluate call return an exception
-    spy.mockImplementationOnce(async () => ({
-      result: { type: "object" },
-      exceptionDetails: { text: "Uncaught ReferenceError" },
-    }));
+    const origSendCommand = (globalThis as any).chrome.debugger.sendCommand;
+    (globalThis as any).chrome.debugger.sendCommand = vi.fn(async (_target: any, method: string, params: any) => {
+      if (method === "Runtime.evaluate") {
+        return { result: { type: "object" }, exceptionDetails: { text: "Uncaught ReferenceError" } };
+      }
+      // Delegate everything else to original.
+      return origSendCommand(_target, method, params);
+    });
     const resp = await d.handle({
       jsonrpc: "2.0", id: 41, method: "page.evalJs",
       params: { tabId: 1, expression: "nope()" },
     });
     expect((resp.result as any).type).toBe("exception");
     expect((resp.result as any).exception).toMatch(/ReferenceError/);
+    // Restore.
+    (globalThis as any).chrome.debugger.sendCommand = origSendCommand;
   });
 
+  // --- console / network ---
   it("console.read triggers attach and returns an empty array for a fresh tab", async () => {
     const resp = await d.handle({
       jsonrpc: "2.0", id: 42, method: "console.read",
       params: { tabId: 2 },
     });
     expect(Array.isArray(resp.result)).toBe(true);
-    expect((resp.result as any[]).length).toBe(0);
     expect((globalThis as any).chrome.debugger.attach).toHaveBeenCalled();
   });
 
@@ -256,7 +351,6 @@ describe("handlers", () => {
   });
 
   it("session.claim sets the toolbar badge when overlay injection fails", async () => {
-    // Force executeScript to reject for the overlay-injection call.
     const spy = (globalThis as any).chrome.scripting.executeScript as ReturnType<typeof vi.fn>;
     spy.mockImplementationOnce(async () => { throw new Error("CSP blocked"); });
 

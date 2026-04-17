@@ -1,6 +1,14 @@
 import type { Dispatcher } from "../dispatcher.js";
 import { PageSnapshotParamsSchema, PageScreenshotParamsSchema } from "@browseruse/shared";
 import { resolveTabId } from "../lib/active-tab.js";
+import { captureA11ySnapshot } from "../lib/snapshot-manager.js";
+import type { DebuggerManager } from "../lib/debugger-manager.js";
+
+/** Shared helper: produce an a11y snapshot string for a tab. Used by interaction handlers too. */
+export async function takeA11ySnapshot(mgr: DebuggerManager, tabId: number, maxBytes = 80_000): Promise<string> {
+  const { content } = await captureA11ySnapshot(mgr, tabId, maxBytes);
+  return content;
+}
 
 // Runs in-page. Must be self-contained (no closures).
 function textSnapshot(maxBytes: number) {
@@ -27,41 +35,24 @@ function domSnapshot(maxBytes: number) {
   };
 }
 
-function a11ySnapshot(maxBytes: number) {
-  // Simple accessibility tree — role + name + value for focusable / nameable elements.
-  // Full AX tree via CDP is a later improvement.
-  const nodes: string[] = [];
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-  let n: Node | null;
-  while ((n = walker.nextNode())) {
-    const el = n as HTMLElement;
-    const role = el.getAttribute("role") ?? el.tagName.toLowerCase();
-    const name =
-      el.getAttribute("aria-label") ??
-      el.getAttribute("alt") ??
-      (el instanceof HTMLInputElement ? (el.placeholder || el.name || "") : "") ??
-      "";
-    const text = (el.innerText || "").trim().slice(0, 80);
-    if (["button", "a", "input", "textarea", "select", "summary"].includes(role) || name || text) {
-      nodes.push(`${role}${name ? ` "${name}"` : ""}${text ? ` — ${text}` : ""}`);
-    }
-  }
-  const raw = nodes.join("\n");
-  const truncated = raw.length > maxBytes;
-  return {
-    mode: "a11y" as const,
-    url: location.href,
-    title: document.title,
-    content: truncated ? raw.slice(0, maxBytes) : raw,
-    truncated,
-  };
-}
-
-export function registerPageReadHandlers(d: Dispatcher) {
+export function registerPageReadHandlers(d: Dispatcher, mgr: DebuggerManager) {
   d.register("page.snapshot", async (raw) => {
     const p = PageSnapshotParamsSchema.parse(raw);
     const tabId = await resolveTabId(p.tabId);
-    const fn = p.mode === "dom" ? domSnapshot : p.mode === "a11y" ? a11ySnapshot : textSnapshot;
+
+    if (p.mode === "a11y") {
+      const { content, truncated } = await captureA11ySnapshot(mgr, tabId, p.maxBytes);
+      const tab = await chrome.tabs.get(tabId);
+      return {
+        mode: "a11y" as const,
+        url: tab.url ?? "",
+        title: tab.title ?? "",
+        content,
+        truncated,
+      };
+    }
+
+    const fn = p.mode === "dom" ? domSnapshot : textSnapshot;
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
       func: fn,
@@ -77,7 +68,6 @@ export function registerPageReadHandlers(d: Dispatcher) {
     const opts: chrome.tabs.CaptureVisibleTabOptions =
       p.format === "jpeg" ? { format: "jpeg", quality: p.quality } : { format: "png" };
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId!, opts);
-    // dataUrl is "data:image/jpeg;base64,XXXX" — strip prefix.
     const comma = dataUrl.indexOf(",");
     const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
     return { format: p.format, base64 };

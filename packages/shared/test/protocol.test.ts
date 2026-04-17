@@ -12,6 +12,9 @@ import {
   PageClickParamsSchema,
   PageTypeParamsSchema,
   PageScrollParamsSchema,
+  PageHoverParamsSchema,
+  PagePressKeyParamsSchema,
+  PageFillFormParamsSchema,
   PageEvalJsParamsSchema,
   ConsoleReadParamsSchema,
   ConsoleReadResultSchema,
@@ -88,9 +91,9 @@ describe("protocol round-trip", () => {
     ).toThrow();
   });
 
-  it("page.snapshot params default mode=text and maxBytes=80000", () => {
+  it("page.snapshot params default mode=a11y and maxBytes=80000", () => {
     const parsed = PageSnapshotParamsSchema.parse({ tabId: 1 });
-    expect(parsed.mode).toBe("text");
+    expect(parsed.mode).toBe("a11y");
     expect(parsed.maxBytes).toBe(80_000);
   });
 
@@ -110,38 +113,46 @@ describe("protocol round-trip", () => {
     expect(parsed.tabId).toBeUndefined();
   });
 
-  it("page.evalJs accepts no tabId (active-tab fallback)", () => {
-    const parsed = PageEvalJsParamsSchema.parse({ expression: "1+1" });
-    expect(parsed.tabId).toBeUndefined();
+  // --- click: uid OR selector ---
+  it("page.click accepts uid", () => {
+    const p = PageClickParamsSchema.parse({ tabId: 1, uid: "e42" });
+    expect(p.uid).toBe("e42");
+    expect(p.selector).toBeUndefined();
   });
-
-  it("console.read accepts no tabId (active-tab fallback)", () => {
-    const parsed = ConsoleReadParamsSchema.parse({});
-    expect(parsed.tabId).toBeUndefined();
-  });
-
-  it("network.read accepts no tabId (active-tab fallback)", () => {
-    const parsed = NetworkReadParamsSchema.parse({});
-    expect(parsed.tabId).toBeUndefined();
-  });
-
-  it("page.snapshot rejects mode outside enum", () => {
-    expect(() => PageSnapshotParamsSchema.parse({ tabId: 1, mode: "xml" })).toThrow();
-  });
-
-  it("page.click rejects empty selector", () => {
-    expect(() => PageClickParamsSchema.parse({ tabId: 1, selector: "" })).toThrow();
-  });
-  it("page.click defaults button=left and scrollIntoView=true", () => {
+  it("page.click accepts selector", () => {
     const p = PageClickParamsSchema.parse({ tabId: 1, selector: "#go" });
+    expect(p.selector).toBe("#go");
+  });
+  it("page.click rejects when neither uid nor selector", () => {
+    expect(() => PageClickParamsSchema.parse({ tabId: 1 })).toThrow();
+  });
+  it("page.click defaults button=left, scrollIntoView=true, includeSnapshot=false", () => {
+    const p = PageClickParamsSchema.parse({ tabId: 1, uid: "e1" });
     expect(p.button).toBe("left");
     expect(p.scrollIntoView).toBe(true);
+    expect(p.includeSnapshot).toBe(false);
   });
-  it("page.type defaults submit=false, clear=true", () => {
+
+  // --- type: uid OR selector ---
+  it("page.type accepts uid", () => {
+    const p = PageTypeParamsSchema.parse({ tabId: 1, uid: "e5", text: "hello" });
+    expect(p.uid).toBe("e5");
+  });
+  it("page.type accepts selector", () => {
     const p = PageTypeParamsSchema.parse({ tabId: 1, selector: "#q", text: "hi" });
+    expect(p.selector).toBe("#q");
+  });
+  it("page.type rejects when neither uid nor selector", () => {
+    expect(() => PageTypeParamsSchema.parse({ tabId: 1, text: "hi" })).toThrow();
+  });
+  it("page.type defaults submit=false, clear=true, includeSnapshot=false", () => {
+    const p = PageTypeParamsSchema.parse({ tabId: 1, uid: "e1", text: "hi" });
     expect(p.submit).toBe(false);
     expect(p.clear).toBe(true);
+    expect(p.includeSnapshot).toBe(false);
   });
+
+  // --- scroll ---
   it("page.scroll rejects params with no scroll target", () => {
     expect(() => PageScrollParamsSchema.parse({ tabId: 1 })).toThrow();
   });
@@ -152,14 +163,79 @@ describe("protocol round-trip", () => {
     const p = PageScrollParamsSchema.parse({ tabId: 1, selector: "#footer" });
     expect(p.selector).toBe("#footer");
     expect(p.smooth).toBe(false);
+    expect(p.includeSnapshot).toBe(false);
   });
   it("page.scroll accepts {to: 'bottom'}", () => {
     const p = PageScrollParamsSchema.parse({ tabId: 1, to: "bottom" });
     expect(p.to).toBe("bottom");
   });
 
+  // --- hover ---
+  it("page.hover accepts uid", () => {
+    const p = PageHoverParamsSchema.parse({ tabId: 1, uid: "e7" });
+    expect(p.uid).toBe("e7");
+    expect(p.includeSnapshot).toBe(false);
+  });
+  it("page.hover accepts selector", () => {
+    const p = PageHoverParamsSchema.parse({ tabId: 1, selector: ".menu-trigger" });
+    expect(p.selector).toBe(".menu-trigger");
+  });
+  it("page.hover rejects when neither uid nor selector", () => {
+    expect(() => PageHoverParamsSchema.parse({ tabId: 1 })).toThrow();
+  });
+
+  // --- pressKey ---
+  it("page.pressKey validates with key only", () => {
+    const p = PagePressKeyParamsSchema.parse({ tabId: 1, key: "Enter" });
+    expect(p.key).toBe("Enter");
+    expect(p.modifiers).toEqual([]);
+    expect(p.includeSnapshot).toBe(false);
+  });
+  it("page.pressKey accepts modifiers", () => {
+    const p = PagePressKeyParamsSchema.parse({ tabId: 1, key: "a", modifiers: ["Control"] });
+    expect(p.modifiers).toEqual(["Control"]);
+  });
+  it("page.pressKey rejects invalid modifier", () => {
+    expect(() => PagePressKeyParamsSchema.parse({ tabId: 1, key: "a", modifiers: ["Hyper"] })).toThrow();
+  });
+
+  // --- fillForm ---
+  it("page.fillForm accepts array of uid-targeted fields", () => {
+    const p = PageFillFormParamsSchema.parse({
+      tabId: 1,
+      fields: [
+        { uid: "e1", value: "Alice" },
+        { uid: "e2", value: "alice@example.com" },
+      ],
+    });
+    expect(p.fields).toHaveLength(2);
+    expect(p.submit).toBe(false);
+    expect(p.includeSnapshot).toBe(false);
+  });
+  it("page.fillForm accepts selector-targeted fields", () => {
+    const p = PageFillFormParamsSchema.parse({
+      tabId: 1,
+      fields: [{ selector: "#name", value: "Bob" }],
+    });
+    expect(p.fields[0].selector).toBe("#name");
+  });
+  it("page.fillForm rejects field without uid or selector", () => {
+    expect(() => PageFillFormParamsSchema.parse({
+      tabId: 1,
+      fields: [{ value: "no target" }],
+    })).toThrow();
+  });
+  it("page.fillForm rejects empty fields array", () => {
+    expect(() => PageFillFormParamsSchema.parse({ tabId: 1, fields: [] })).toThrow();
+  });
+
+  // --- evalJs ---
+  it("page.evalJs accepts no tabId (active-tab fallback)", () => {
+    const parsed = PageEvalJsParamsSchema.parse({ expression: "1+1" });
+    expect(parsed.tabId).toBeUndefined();
+  });
   it("page.evalJs defaults awaitPromise=true, returnByValue=true, timeoutMs=5000", () => {
-    const p = PageEvalJsParamsSchema.parse({ tabId: 1, expression: "1+1" });  // tabId explicit
+    const p = PageEvalJsParamsSchema.parse({ tabId: 1, expression: "1+1" });
     expect(p.awaitPromise).toBe(true);
     expect(p.returnByValue).toBe(true);
     expect(p.timeoutMs).toBe(5_000);
@@ -171,6 +247,15 @@ describe("protocol round-trip", () => {
     expect(() => PageEvalJsParamsSchema.parse({ tabId: 1, expression: "1", timeoutMs: 99999 })).toThrow();
   });
 
+  // --- console/network ---
+  it("console.read accepts no tabId (active-tab fallback)", () => {
+    const parsed = ConsoleReadParamsSchema.parse({});
+    expect(parsed.tabId).toBeUndefined();
+  });
+  it("network.read accepts no tabId (active-tab fallback)", () => {
+    const parsed = NetworkReadParamsSchema.parse({});
+    expect(parsed.tabId).toBeUndefined();
+  });
   it("console.read defaults limit=500", () => {
     expect(ConsoleReadParamsSchema.parse({ tabId: 1 }).limit).toBe(500);
   });
@@ -181,7 +266,6 @@ describe("protocol round-trip", () => {
     const r = [{ ts: 1, level: "error" as const, text: "boom" }];
     expect(ConsoleReadResultSchema.parse(r)).toEqual(r);
   });
-
   it("network.read accepts optional status and durationMs", () => {
     const r = [{ ts: 1, method: "GET", url: "https://a", type: "Document" }];
     expect(NetworkReadResultSchema.parse(r)).toEqual(r);

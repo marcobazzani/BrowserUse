@@ -1,5 +1,5 @@
 import type { Dispatcher } from "../dispatcher.js";
-import { DebuggerManager } from "../lib/debugger-manager.js";
+import type { DebuggerManager } from "../lib/debugger-manager.js";
 import { resolveTabId } from "../lib/active-tab.js";
 import {
   PageEvalJsParamsSchema,
@@ -7,15 +7,12 @@ import {
   NetworkReadParamsSchema,
 } from "@browseruse/shared";
 
-// Module-level singleton — service-worker is a single-instance environment.
-const mgr = new DebuggerManager();
-
 type RuntimeEvaluateResult = {
   result: { type: string; value?: unknown; description?: string };
   exceptionDetails?: { text: string };
 };
 
-export function registerDebugHandlers(d: Dispatcher) {
+export function registerDebugHandlers(d: Dispatcher, mgr: DebuggerManager) {
   d.register("page.evalJs", async (raw) => {
     const p = PageEvalJsParamsSchema.parse(raw);
     const tabId = await resolveTabId(p.tabId);
@@ -38,7 +35,7 @@ export function registerDebugHandlers(d: Dispatcher) {
   d.register("console.read", async (raw) => {
     const p = ConsoleReadParamsSchema.parse(raw);
     const tabId = await resolveTabId(p.tabId);
-    await mgr.attach(tabId); // idempotent — ensures a buffer exists even before any event fires
+    await mgr.attach(tabId);
     return mgr.readConsole(tabId, p.pattern, p.since, p.limit);
   });
 
@@ -49,6 +46,3 @@ export function registerDebugHandlers(d: Dispatcher) {
     return mgr.readNetwork(tabId, p.pattern, p.since, p.limit);
   });
 }
-
-// Exposed for unit tests so they can inject a fake manager.
-export const _debugInternals = { mgr };

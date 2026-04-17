@@ -12,7 +12,7 @@ const fakeBridge = () => {
         if (method === "tabs.create") return { tabId: 2, url: (params as any).url, title: "", active: true };
         if (method === "page.navigate") return { ok: true, finalUrl: (params as any).url };
         if (method === "session.claim") return { ok: true, groupId: 7 };
-        if (method === "page.snapshot") return { mode: "text", url: "https://x", title: "x", content: "hi", truncated: false };
+        if (method === "page.snapshot") return { mode: "a11y", url: "https://x", title: "x", content: "[e0] button \"Go\"", truncated: false };
         if (method === "page.screenshot") return { format: "png", base64: "aGk=" };
         if (method === "tabs.close")      return { ok: true };
         if (method === "tabs.activate")   return { ok: true };
@@ -20,6 +20,9 @@ const fakeBridge = () => {
         if (method === "page.click")      return { ok: true };
         if (method === "page.type")       return { ok: true };
         if (method === "page.scroll")     return { ok: true };
+        if (method === "page.hover")      return { ok: true };
+        if (method === "page.pressKey")   return { ok: true };
+        if (method === "page.fillForm")   return { ok: true, filledCount: 2 };
         if (method === "page.evalJs")    return { type: "string", value: "hi" };
         if (method === "console.read")   return [{ ts: 1, level: "error", text: "boom" }];
         if (method === "network.read")   return [{ ts: 1, method: "GET", url: "https://a", type: "Document", status: 200, durationMs: 12 }];
@@ -96,7 +99,6 @@ describe("tool adapters", () => {
     await tools.page_navigate.handler({ tabId: 5, url: "https://a" });
     await tools.page_navigate.handler({ tabId: 5, url: "https://b" });
     const methods = calls.map((c) => c.method);
-    // Expected: session.claim once, then two page.navigate calls
     expect(methods).toEqual(["session.claim", "page.navigate", "page.navigate"]);
   });
 
@@ -121,7 +123,15 @@ describe("tool adapters", () => {
     expect(calls.map(c => c.method)).toEqual(["session.release"]);
   });
 
-  it("page_click auto-claims and forwards selector/button/scrollIntoView", async () => {
+  it("page_click auto-claims and forwards uid", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_click.handler({ tabId: 7, uid: "e42" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.click"]);
+    expect((calls[1]!.params as any).uid).toBe("e42");
+  });
+
+  it("page_click auto-claims and forwards selector", async () => {
     const { bridge, calls } = fakeBridge();
     const tools = buildTools(bridge);
     await tools.page_click.handler({ tabId: 7, selector: "#go" });
@@ -130,11 +140,12 @@ describe("tool adapters", () => {
     expect((calls[1]!.params as any).button).toBe("left");
   });
 
-  it("page_type auto-claims and forwards text + submit default", async () => {
+  it("page_type auto-claims and forwards uid + text", async () => {
     const { bridge, calls } = fakeBridge();
     const tools = buildTools(bridge);
-    await tools.page_type.handler({ tabId: 7, selector: "#q", text: "hi" });
+    await tools.page_type.handler({ tabId: 7, uid: "e5", text: "hi" });
     expect(calls.map(c => c.method)).toEqual(["session.claim", "page.type"]);
+    expect((calls[1]!.params as any).uid).toBe("e5");
     expect((calls[1]!.params as any).submit).toBe(false);
   });
 
@@ -149,6 +160,37 @@ describe("tool adapters", () => {
     const { bridge } = fakeBridge();
     const tools = buildTools(bridge);
     await expect(tools.page_scroll.handler({ tabId: 7 } as any)).rejects.toThrow();
+  });
+
+  it("page_hover auto-claims and forwards uid", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_hover.handler({ tabId: 7, uid: "e10" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.hover"]);
+    expect((calls[1]!.params as any).uid).toBe("e10");
+  });
+
+  it("page_press_key auto-claims and forwards key + modifiers", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_press_key.handler({ tabId: 7, key: "Enter" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.pressKey"]);
+    expect((calls[1]!.params as any).key).toBe("Enter");
+    expect((calls[1]!.params as any).modifiers).toEqual([]);
+  });
+
+  it("page_fill_form auto-claims and forwards fields", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_fill_form.handler({
+      tabId: 7,
+      fields: [
+        { uid: "e1", value: "Alice" },
+        { uid: "e2", value: "alice@example.com" },
+      ],
+    });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.fillForm"]);
+    expect((calls[1]!.params as any).fields).toHaveLength(2);
   });
 
   it("page_eval_js auto-claims and forwards the expression", async () => {

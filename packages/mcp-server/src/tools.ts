@@ -10,6 +10,9 @@ import {
   PageClickParamsSchema,
   PageTypeParamsSchema,
   PageScrollParamsSchema,
+  PageHoverParamsSchema,
+  PagePressKeyParamsSchema,
+  PageFillFormParamsSchema,
   SessionReleaseParamsSchema,
   PageEvalJsParamsSchema,
   ConsoleReadParamsSchema,
@@ -43,6 +46,7 @@ export function buildTools(bridge: BridgeServer) {
     await bridge.call("session.claim", { tabId });
     claimed.add(tabId);
   }
+
   const tabs_list: Tool<Record<string, never>> = {
     description: "List all tabs across all windows in the user's Chrome.",
     inputSchema: TabsListParamsSchema,
@@ -77,7 +81,7 @@ export function buildTools(bridge: BridgeServer) {
 
   const page_snapshot: Tool<z.infer<typeof PageSnapshotParamsSchema>> = {
     description:
-      "Read the page content of a tab. mode=text returns innerText (default). mode=dom returns outerHTML. mode=a11y returns a flattened accessibility tree. If tabId is omitted, reads the active tab in the last-focused window.",
+      "Take a snapshot of the page. Default mode=a11y returns a uid-annotated accessibility tree — each interactive element has a [uid] you can pass to click/type/hover. mode=text returns innerText. mode=dom returns outerHTML. ALWAYS take a snapshot before interacting with a page. If tabId is omitted, reads the active tab.",
     inputSchema: PageSnapshotParamsSchema,
     handler: async (params) => {
       guard(bridge);
@@ -89,7 +93,7 @@ export function buildTools(bridge: BridgeServer) {
 
   const page_screenshot: Tool<z.infer<typeof PageScreenshotParamsSchema>> = {
     description:
-      "Capture a screenshot of the visible area of a tab as a base64-encoded image. If tabId is omitted, reads the active tab in the last-focused window.",
+      "Capture a screenshot of the visible area of a tab as a base64-encoded image. Prefer page_snapshot for understanding page structure. If tabId is omitted, reads the active tab.",
     inputSchema: PageScreenshotParamsSchema,
     handler: async (params) => {
       guard(bridge);
@@ -127,7 +131,8 @@ export function buildTools(bridge: BridgeServer) {
   };
 
   const page_click: Tool<z.infer<typeof PageClickParamsSchema>> = {
-    description: "Click an element in a tab by CSS selector.",
+    description:
+      "Click an element by uid (from a snapshot) or CSS selector. Prefer uid — it is reliable and precise. Set includeSnapshot=true to get an updated accessibility tree in the response.",
     inputSchema: PageClickParamsSchema,
     handler: async (params) => {
       guard(bridge);
@@ -138,7 +143,8 @@ export function buildTools(bridge: BridgeServer) {
   };
 
   const page_type: Tool<z.infer<typeof PageTypeParamsSchema>> = {
-    description: "Type text into an input/textarea by CSS selector. Optionally submits the enclosing form.",
+    description:
+      "Type text into an input/textarea by uid (from a snapshot) or CSS selector. Clears the field first by default. Set submit=true to submit the enclosing form. Set includeSnapshot=true to get an updated accessibility tree in the response.",
     inputSchema: PageTypeParamsSchema,
     handler: async (params) => {
       guard(bridge);
@@ -149,7 +155,8 @@ export function buildTools(bridge: BridgeServer) {
   };
 
   const page_scroll: Tool<z.infer<typeof PageScrollParamsSchema>> = {
-    description: "Scroll a tab by (dx, dy) pixels, to an element matching a CSS selector, or to 'top'/'bottom'. Provide exactly one target.",
+    description:
+      "Scroll a tab by (dx, dy) pixels, to an element matching a CSS selector, or to 'top'/'bottom'. Provide exactly one target. Set includeSnapshot=true to get an updated accessibility tree.",
     inputSchema: PageScrollParamsSchema,
     handler: async (params) => {
       guard(bridge);
@@ -159,8 +166,45 @@ export function buildTools(bridge: BridgeServer) {
     },
   };
 
+  const page_hover: Tool<z.infer<typeof PageHoverParamsSchema>> = {
+    description:
+      "Hover over an element by uid (from a snapshot) or CSS selector. Useful for revealing tooltips, dropdown menus, or hover states. Set includeSnapshot=true to get the updated page state after hover.",
+    inputSchema: PageHoverParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageHoverParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.hover", parsed));
+    },
+  };
+
+  const page_press_key: Tool<z.infer<typeof PagePressKeyParamsSchema>> = {
+    description:
+      "Press a keyboard key (Enter, Escape, Tab, ArrowDown, Backspace, Space, etc.). Supports modifiers: Alt, Control, Meta, Shift. Set includeSnapshot=true to get the updated page state.",
+    inputSchema: PagePressKeyParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PagePressKeyParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.pressKey", parsed));
+    },
+  };
+
+  const page_fill_form: Tool<z.infer<typeof PageFillFormParamsSchema>> = {
+    description:
+      "Fill multiple form fields in one call. Each field is targeted by uid (from a snapshot) or CSS selector. Set submit=true to submit the form after filling. Much more efficient than multiple page_type calls.",
+    inputSchema: PageFillFormParamsSchema,
+    handler: async (params) => {
+      guard(bridge);
+      const parsed = PageFillFormParamsSchema.parse(params);
+      await ensureClaim(parsed.tabId);
+      return text(await bridge.call("page.fillForm", parsed));
+    },
+  };
+
   const page_eval_js: Tool<z.infer<typeof PageEvalJsParamsSchema>> = {
-    description: "Evaluate a JavaScript expression in a tab's context. Auto-claims the tab. DANGEROUS: runs with full page privileges. If tabId is omitted, reads the active tab in the last-focused window.",
+    description:
+      "Evaluate a JavaScript expression in a tab's context. Use as an escape hatch when other tools don't cover your needs. If tabId is omitted, reads the active tab.",
     inputSchema: PageEvalJsParamsSchema,
     handler: async (params) => {
       guard(bridge);
@@ -192,6 +236,7 @@ export function buildTools(bridge: BridgeServer) {
     tabs_list, tabs_create, tabs_close, tabs_activate,
     page_navigate, page_snapshot, page_screenshot,
     page_click, page_type, page_scroll,
+    page_hover, page_press_key, page_fill_form,
     session_release,
     page_eval_js, console_read, network_read,
   };

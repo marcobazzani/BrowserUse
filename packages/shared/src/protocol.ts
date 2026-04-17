@@ -58,10 +58,12 @@ export const SessionClaimResultSchema = z.object({
 export const SessionReleaseParamsSchema = z.object({ tabId: z.number().int() }).strict();
 export const SessionReleaseResultSchema = z.object({ ok: z.literal(true) }).strict();
 
+/* ---------- Snapshot (a11y mode now returns uid-annotated CDP tree) ---------- */
+
 export const PageSnapshotParamsSchema = z
   .object({
-    tabId: z.number().int().optional(),   // omit to target the active tab
-    mode: z.enum(["text", "dom", "a11y"]).default("text"),
+    tabId: z.number().int().optional(),
+    mode: z.enum(["text", "dom", "a11y"]).default("a11y"),
     maxBytes: z.number().int().positive().max(2_000_000).default(80_000),
   })
   .strict();
@@ -77,45 +79,67 @@ export const PageSnapshotResultSchema = z
 
 export const PageScreenshotParamsSchema = z
   .object({
-    tabId: z.number().int().optional(),   // omit to target the active tab
+    tabId: z.number().int().optional(),
     format: z.enum(["png", "jpeg"]).default("jpeg"),
-    quality: z.number().int().min(1).max(100).default(60),   // jpeg only
+    quality: z.number().int().min(1).max(100).default(60),
   })
   .strict();
 export const PageScreenshotResultSchema = z
   .object({ format: z.enum(["png", "jpeg"]), base64: z.string() })
   .strict();
 
+/* ---------- Interaction: click, type, scroll (uid OR selector) ---------- */
+
 export const PageClickParamsSchema = z
   .object({
     tabId: z.number().int(),
-    selector: z.string().min(1),
+    uid: z.string().min(1).optional(),
+    selector: z.string().min(1).optional(),
     button: z.enum(["left", "right", "middle"]).default("left"),
     scrollIntoView: z.boolean().default(true),
+    includeSnapshot: z.boolean().default(false),
   })
-  .strict();
-export const PageClickResultSchema = z.object({ ok: z.literal(true) }).strict();
+  .strict()
+  .superRefine((v, ctx) => {
+    if (!v.uid && !v.selector) {
+      ctx.addIssue({ code: "custom", message: "provide either uid or selector" });
+    }
+  });
+export const PageClickResultSchema = z.object({
+  ok: z.literal(true),
+  snapshot: z.string().optional(),
+}).strict();
 
 export const PageTypeParamsSchema = z
   .object({
     tabId: z.number().int(),
-    selector: z.string().min(1),
+    uid: z.string().min(1).optional(),
+    selector: z.string().min(1).optional(),
     text: z.string(),
     submit: z.boolean().default(false),
     clear: z.boolean().default(true),
+    includeSnapshot: z.boolean().default(false),
   })
-  .strict();
-export const PageTypeResultSchema = z.object({ ok: z.literal(true) }).strict();
+  .strict()
+  .superRefine((v, ctx) => {
+    if (!v.uid && !v.selector) {
+      ctx.addIssue({ code: "custom", message: "provide either uid or selector" });
+    }
+  });
+export const PageTypeResultSchema = z.object({
+  ok: z.literal(true),
+  snapshot: z.string().optional(),
+}).strict();
 
 export const PageScrollParamsSchema = z
   .object({
     tabId: z.number().int(),
-    // Either (dx,dy) OR selector OR "top"/"bottom" — any one of these. We validate at least one is provided via .superRefine below.
     dx: z.number().optional(),
     dy: z.number().optional(),
     selector: z.string().min(1).optional(),
     to: z.enum(["top", "bottom"]).optional(),
     smooth: z.boolean().default(false),
+    includeSnapshot: z.boolean().default(false),
   })
   .strict()
   .superRefine((v, ctx) => {
@@ -128,31 +152,97 @@ export const PageScrollParamsSchema = z
       ctx.addIssue({ code: "custom", message: "provide exactly one of: (dx/dy), selector, or to" });
     }
   });
-export const PageScrollResultSchema = z.object({ ok: z.literal(true) }).strict();
+export const PageScrollResultSchema = z.object({
+  ok: z.literal(true),
+  snapshot: z.string().optional(),
+}).strict();
+
+/* ---------- Hover ---------- */
+
+export const PageHoverParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    uid: z.string().min(1).optional(),
+    selector: z.string().min(1).optional(),
+    includeSnapshot: z.boolean().default(false),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (!v.uid && !v.selector) {
+      ctx.addIssue({ code: "custom", message: "provide either uid or selector" });
+    }
+  });
+export const PageHoverResultSchema = z.object({
+  ok: z.literal(true),
+  snapshot: z.string().optional(),
+}).strict();
+
+/* ---------- Press key ---------- */
+
+export const PagePressKeyParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    key: z.string().min(1),
+    modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).default([]),
+    includeSnapshot: z.boolean().default(false),
+  })
+  .strict();
+export const PagePressKeyResultSchema = z.object({
+  ok: z.literal(true),
+  snapshot: z.string().optional(),
+}).strict();
+
+/* ---------- Fill form (batch) ---------- */
+
+export const FillFormFieldSchema = z.object({
+  uid: z.string().min(1).optional(),
+  selector: z.string().min(1).optional(),
+  value: z.string(),
+}).strict().superRefine((v, ctx) => {
+  if (!v.uid && !v.selector) {
+    ctx.addIssue({ code: "custom", message: "provide either uid or selector" });
+  }
+});
+
+export const PageFillFormParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    fields: z.array(FillFormFieldSchema).min(1),
+    submit: z.boolean().default(false),
+    includeSnapshot: z.boolean().default(false),
+  })
+  .strict();
+export const PageFillFormResultSchema = z.object({
+  ok: z.literal(true),
+  filledCount: z.number().int(),
+  snapshot: z.string().optional(),
+}).strict();
+
+/* ---------- Escape hatch & logs ---------- */
 
 export const PageEvalJsParamsSchema = z.object({
-  tabId: z.number().int().optional(),   // omit to target the active tab
+  tabId: z.number().int().optional(),
   expression: z.string().min(1),
   awaitPromise: z.boolean().default(true),
   returnByValue: z.boolean().default(true),
   timeoutMs: z.number().int().positive().max(30_000).default(5_000),
 }).strict();
 export const PageEvalJsResultSchema = z.object({
-  type: z.string(),           // "string" | "number" | "object" | "undefined" | "exception" | ...
+  type: z.string(),
   value: z.unknown().optional(),
   description: z.string().optional(),
   exception: z.string().optional(),
 }).strict();
 
 export const ConsoleEntrySchema = z.object({
-  ts: z.number(),             // epoch ms
+  ts: z.number(),
   level: z.enum(["log", "info", "warn", "error", "debug"]),
   text: z.string(),
 }).strict();
 export const ConsoleReadParamsSchema = z.object({
-  tabId: z.number().int().optional(),   // omit to target the active tab
-  pattern: z.string().optional(),       // regex source; match against `text`
-  since: z.number().optional(),         // epoch ms; return entries newer than this
+  tabId: z.number().int().optional(),
+  pattern: z.string().optional(),
+  since: z.number().optional(),
   limit: z.number().int().positive().max(2000).default(500),
 }).strict();
 export const ConsoleReadResultSchema = z.array(ConsoleEntrySchema);
@@ -166,7 +256,7 @@ export const NetworkEntrySchema = z.object({
   type: z.string(),
 }).strict();
 export const NetworkReadParamsSchema = z.object({
-  tabId: z.number().int().optional(),   // omit to target the active tab
+  tabId: z.number().int().optional(),
   pattern: z.string().optional(),
   since: z.number().optional(),
   limit: z.number().int().positive().max(2000).default(500),
@@ -175,18 +265,21 @@ export const NetworkReadResultSchema = z.array(NetworkEntrySchema);
 
 /** Every method the extension must implement. */
 export const METHODS = {
-  "tabs.list":     { params: TabsListParamsSchema,     result: TabsListResultSchema },
-  "tabs.create":   { params: TabsCreateParamsSchema,   result: TabsCreateResultSchema },
-  "tabs.close":    { params: TabsCloseParamsSchema,    result: TabsCloseResultSchema },
-  "tabs.activate": { params: TabsActivateParamsSchema, result: TabsActivateResultSchema },
-  "page.navigate": { params: PageNavigateParamsSchema, result: PageNavigateResultSchema },
-  "session.claim": { params: SessionClaimParamsSchema, result: SessionClaimResultSchema },
+  "tabs.list":       { params: TabsListParamsSchema,       result: TabsListResultSchema },
+  "tabs.create":     { params: TabsCreateParamsSchema,     result: TabsCreateResultSchema },
+  "tabs.close":      { params: TabsCloseParamsSchema,      result: TabsCloseResultSchema },
+  "tabs.activate":   { params: TabsActivateParamsSchema,   result: TabsActivateResultSchema },
+  "page.navigate":   { params: PageNavigateParamsSchema,   result: PageNavigateResultSchema },
+  "session.claim":   { params: SessionClaimParamsSchema,   result: SessionClaimResultSchema },
   "session.release": { params: SessionReleaseParamsSchema, result: SessionReleaseResultSchema },
   "page.snapshot":   { params: PageSnapshotParamsSchema,   result: PageSnapshotResultSchema },
   "page.screenshot": { params: PageScreenshotParamsSchema, result: PageScreenshotResultSchema },
   "page.click":      { params: PageClickParamsSchema,      result: PageClickResultSchema },
   "page.type":       { params: PageTypeParamsSchema,       result: PageTypeResultSchema },
   "page.scroll":     { params: PageScrollParamsSchema,     result: PageScrollResultSchema },
+  "page.hover":      { params: PageHoverParamsSchema,      result: PageHoverResultSchema },
+  "page.pressKey":   { params: PagePressKeyParamsSchema,   result: PagePressKeyResultSchema },
+  "page.fillForm":   { params: PageFillFormParamsSchema,   result: PageFillFormResultSchema },
   "page.evalJs":     { params: PageEvalJsParamsSchema,     result: PageEvalJsResultSchema },
   "console.read":    { params: ConsoleReadParamsSchema,    result: ConsoleReadResultSchema },
   "network.read":    { params: NetworkReadParamsSchema,    result: NetworkReadResultSchema },
