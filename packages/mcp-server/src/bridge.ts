@@ -5,6 +5,7 @@ import {
   RpcRequestSchema,
   RpcResponseSchema,
   type RpcResponse,
+  type ProfileInfo,
 } from "@browseruse/shared";
 
 export interface Correlator {
@@ -56,18 +57,27 @@ export function createCorrelator(opts: { timeoutMs: number }): Correlator {
   };
 }
 
+interface ExtensionEntry {
+  ws: WebSocket;
+  label: string;
+  connectedAt: number;
+  corr: Correlator;
+  nextId: number;
+}
+
+const DEFAULT_PROFILE = "default";
+
 export class BridgeServer {
   private wss?: WebSocketServer;
-  private authed?: WebSocket;
-  private corr: Correlator;
-  private nextId = 1;
+  // Map of profile tag → extension entry. Anonymous connections (no profile)
+  // are stored under "default" so legacy (v0.5.x) extensions keep working.
+  private extensions = new Map<string, ExtensionEntry>();
   private token: string;
   private timeoutMs: number;
 
   constructor(opts: { token: string; timeoutMs: number }) {
     this.token = opts.token;
     this.timeoutMs = opts.timeoutMs;
-    this.corr = createCorrelator({ timeoutMs: opts.timeoutMs });
   }
 
   async listen(port: number): Promise<number> {
@@ -90,6 +100,7 @@ export class BridgeServer {
 
   private onConnection(ws: WebSocket) {
     let authed = false;
+    let profile: string | undefined;
     const authTimer = setTimeout(() => {
       if (!authed) ws.close(4001, "auth timeout");
     }, 3000);
@@ -118,7 +129,22 @@ export class BridgeServer {
         }
         authed = true;
         clearTimeout(authTimer);
-        this.authed = ws;
+        profile = hello.data.profile ?? DEFAULT_PROFILE;
+        const label = hello.data.label ?? profile.slice(0, 12);
+        // If a prior connection held this tag, evict it cleanly (takeover).
+        const prev = this.extensions.get(profile);
+        if (prev) {
+          prev.corr.rejectAll(new Error("replaced by new connection"));
+          try { prev.ws.close(4010, "replaced"); } catch { /* ignore */ }
+        }
+        const entry: ExtensionEntry = {
+          ws,
+          label,
+          connectedAt: Date.now(),
+          corr: createCorrelator({ timeoutMs: this.timeoutMs }),
+          nextId: 1,
+        };
+        this.extensions.set(profile, entry);
         return;
       }
       // Keepalive frame from the extension — ignore. Receiving any frame resets
@@ -128,35 +154,89 @@ export class BridgeServer {
       }
       // After auth: incoming frames are responses to our requests.
       const resp = RpcResponseSchema.safeParse(parsed);
-      if (resp.success) this.corr.resolve(resp.data);
+      if (!resp.success || !profile) return;
+      const entry = this.extensions.get(profile);
+      if (entry && entry.ws === ws) entry.corr.resolve(resp.data);
     });
 
     ws.on("close", () => {
-      if (this.authed === ws) {
-        this.authed = undefined;
-        this.corr.rejectAll(new Error("extension disconnected"));
+      if (profile === undefined) return;
+      const entry = this.extensions.get(profile);
+      if (entry && entry.ws === ws) {
+        entry.corr.rejectAll(new Error("extension disconnected"));
+        this.extensions.delete(profile);
       }
     });
   }
 
-  async call<T = unknown>(method: string, params: unknown): Promise<T> {
-    if (!this.authed || this.authed.readyState !== WebSocket.OPEN) {
+  /**
+   * Send a JSON-RPC request to one of the connected extensions.
+   *
+   * Routing:
+   *   - 0 extensions connected → throws "no extension connected"
+   *   - 1 connected and no profile passed → auto-route
+   *   - N connected and no profile passed → throws structured error listing profiles
+   *   - profile passed and not connected → throws "profile X not connected"
+   */
+  async call<T = unknown>(method: string, params: unknown, profile?: string): Promise<T> {
+    if (this.extensions.size === 0) {
       throw new Error("no extension connected");
     }
-    const id = this.nextId++;
+    let entry: ExtensionEntry | undefined;
+    let tag: string | undefined;
+    if (profile !== undefined) {
+      entry = this.extensions.get(profile);
+      if (!entry) {
+        const available = [...this.extensions.keys()].join(", ") || "(none)";
+        throw new Error(
+          `profile "${profile}" is not connected. Connected profiles: ${available}`,
+        );
+      }
+      tag = profile;
+    } else if (this.extensions.size === 1) {
+      const [first] = this.extensions.entries();
+      [tag, entry] = first!;
+    } else {
+      const available = this.listProfiles()
+        .map((p) => `${p.tag} (${p.label})`)
+        .join(", ");
+      throw new Error(
+        `multiple profiles connected: ${available}. Call browseruse_list_profiles then pass profile="<tag>" to target one.`,
+      );
+    }
+    if (!entry || entry.ws.readyState !== WebSocket.OPEN) {
+      throw new Error(`extension connection for profile "${tag}" is not open`);
+    }
+    const id = entry.nextId++;
     const req = { jsonrpc: "2.0" as const, id, method, params };
-    // Validate we're sending a well-formed request envelope.
     RpcRequestSchema.parse(req);
-    this.authed.send(JSON.stringify(req));
-    return this.corr.register<T>(id);
+    entry.ws.send(JSON.stringify(req));
+    return entry.corr.register<T>(id);
   }
 
   isConnected(): boolean {
-    return !!this.authed && this.authed.readyState === WebSocket.OPEN;
+    for (const e of this.extensions.values()) {
+      if (e.ws.readyState === WebSocket.OPEN) return true;
+    }
+    return false;
+  }
+
+  listProfiles(): ProfileInfo[] {
+    const out: ProfileInfo[] = [];
+    for (const [tag, e] of this.extensions) {
+      if (e.ws.readyState === WebSocket.OPEN) {
+        out.push({ tag, label: e.label, connectedAt: e.connectedAt });
+      }
+    }
+    return out.sort((a, b) => a.connectedAt - b.connectedAt);
   }
 
   async close(): Promise<void> {
-    this.corr.rejectAll(new Error("bridge closing"));
+    for (const e of this.extensions.values()) {
+      e.corr.rejectAll(new Error("bridge closing"));
+      try { e.ws.close(); } catch { /* ignore */ }
+    }
+    this.extensions.clear();
     if (!this.wss) return;
     const wss = this.wss;
     this.wss = undefined;

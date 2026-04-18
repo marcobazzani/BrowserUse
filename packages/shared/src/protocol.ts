@@ -4,8 +4,23 @@ import { z } from "zod";
 export const ClientHelloSchema = z.object({
   type: z.literal("hello"),
   token: z.string().min(8),
+  /** Stable per-install identifier (sha256 of chrome.runtime.id). Routes tool calls. */
+  profile: z.string().min(1).optional(),
+  /** Human-readable label shown in list_profiles (defaults to profile tag prefix). */
+  label: z.string().min(1).max(64).optional(),
 });
 export type ClientHello = z.infer<typeof ClientHelloSchema>;
+
+/** Entry returned by list_profiles. */
+export const ProfileInfoSchema = z.object({
+  tag: z.string(),
+  label: z.string(),
+  connectedAt: z.number(),
+}).strict();
+export type ProfileInfo = z.infer<typeof ProfileInfoSchema>;
+
+export const ProfilesListParamsSchema = z.object({}).strict();
+export const ProfilesListResultSchema = z.array(ProfileInfoSchema);
 
 /** Tab summary returned by the extension. */
 export const TabSchema = z.object({
@@ -415,6 +430,7 @@ export const METHODS = {
   "page.uploadFile": { params: PageUploadFileParamsSchema, result: PageUploadFileResultSchema },
   "page.drag":       { params: PageDragParamsSchema,       result: PageDragResultSchema },
   "page.fetch":      { params: PageFetchParamsSchema,      result: PageFetchResultSchema },
+  "profiles.list":   { params: ProfilesListParamsSchema,   result: ProfilesListResultSchema },
   "page.evalJs":     { params: PageEvalJsParamsSchema,     result: PageEvalJsResultSchema },
   "console.read":    { params: ConsoleReadParamsSchema,    result: ConsoleReadResultSchema },
   "network.read":    { params: NetworkReadParamsSchema,    result: NetworkReadResultSchema },

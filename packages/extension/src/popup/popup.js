@@ -7,6 +7,8 @@ const tokenEl = document.getElementById("token");
 const portEl = document.getElementById("port");
 const saveEl = document.getElementById("save");
 const clearEl = document.getElementById("clear");
+const profileLabelEl = document.getElementById("profileLabel");
+const saveLabelEl = document.getElementById("saveLabel");
 
 const SALT = "browseruse-bridge-v1";
 
@@ -34,19 +36,29 @@ async function deriveLocal() {
   return { token, port, tz, platform };
 }
 
+async function deriveProfileTag() {
+  const id = chrome.runtime.id;
+  const encoded = new TextEncoder().encode(id);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  const hex = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `p-${hex.slice(0, 12)}`;
+}
+
 async function refresh() {
-  const { status, token: overrideToken, port: overridePort } = await chrome.storage.local.get([
-    "status",
-    "token",
-    "port",
-  ]);
+  const { status, token: overrideToken, port: overridePort, profileLabel } =
+    await chrome.storage.local.get(["status", "token", "port", "profileLabel"]);
+  const profileTag = await deriveProfileTag();
+  profileLabelEl.value = typeof profileLabel === "string" ? profileLabel : "";
   const derived = await deriveLocal();
   const effToken = overrideToken || derived.token;
   const effPort = overridePort || derived.port;
 
   statusEl.textContent = `Status: ${status ?? "unknown"}`;
+  const labelDisplay = (typeof profileLabel === "string" && profileLabel.trim())
+    ? profileLabel.trim()
+    : profileTag.slice(0, 12);
   pairingEl.textContent =
-    `Pairing: ${overrideToken ? "override" : "auto"} · port ${effPort} · token ${effToken.slice(0, 8)}… (tz=${derived.tz}, ${derived.platform})`;
+    `Pairing: ${overrideToken ? "override" : "auto"} · port ${effPort} · token ${effToken.slice(0, 8)}… · profile ${profileTag} (${labelDisplay})`;
 
   portEl.value = typeof overridePort === "number" ? String(overridePort) : "";
   tokenEl.value = typeof overrideToken === "string" ? overrideToken : "";
@@ -71,6 +83,13 @@ saveEl.addEventListener("click", async () => {
 
 clearEl.addEventListener("click", async () => {
   await chrome.storage.local.remove(["token", "port"]);
+  await refresh();
+});
+
+saveLabelEl.addEventListener("click", async () => {
+  const v = profileLabelEl.value.trim();
+  if (v) await chrome.storage.local.set({ profileLabel: v });
+  else await chrome.storage.local.remove("profileLabel");
   await refresh();
 });
 

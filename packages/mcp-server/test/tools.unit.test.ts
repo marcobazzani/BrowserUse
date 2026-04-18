@@ -2,12 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { buildTools } from "../src/tools.js";
 
 const fakeBridge = () => {
-  const calls: Array<{ method: string; params: unknown }> = [];
+  const calls: Array<{ method: string; params: unknown; profile?: string }> = [];
   return {
     calls,
     bridge: {
-      call: vi.fn(async (method: string, params: unknown) => {
-        calls.push({ method, params });
+      listProfiles: vi.fn(() => [
+        { tag: "work", label: "Work", connectedAt: 1000 },
+        { tag: "personal", label: "Personal", connectedAt: 2000 },
+      ]),
+      call: vi.fn(async (method: string, params: unknown, profile?: string) => {
+        calls.push({ method, params, profile });
         if (method === "tabs.list") return [{ tabId: 1, url: "https://a", title: "a", active: true }];
         if (method === "tabs.create") return { tabId: 2, url: (params as any).url, title: "", active: true };
         if (method === "page.navigate") return { ok: true, finalUrl: (params as any).url };
@@ -284,5 +288,48 @@ describe("tool adapters", () => {
     const tools = buildTools(bridge);
     await tools.page_fetch.handler({ url: "/api/x" });
     expect(calls.map(c => c.method)).toEqual(["page.fetch"]);
+  });
+
+  // --- multi-profile ---
+  it("browseruse_list_profiles returns the bridge's connected extensions", async () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    const result = await tools.browseruse_list_profiles.handler({});
+    const parsed = JSON.parse((result.content[0] as any).text);
+    expect(parsed).toEqual([
+      { tag: "work", label: "Work", connectedAt: 1000 },
+      { tag: "personal", label: "Personal", connectedAt: 2000 },
+    ]);
+  });
+
+  it("threads profile through session.claim and the wire call", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_click.handler({ tabId: 7, uid: "e1", profile: "work" });
+    // session.claim should also carry profile
+    expect(calls[0]).toEqual({ method: "session.claim", params: { tabId: 7 }, profile: "work" });
+    expect(calls[1]!.method).toBe("page.click");
+    expect(calls[1]!.profile).toBe("work");
+    // `profile` must NOT leak into the wire params
+    expect(Object.keys(calls[1]!.params as any)).not.toContain("profile");
+  });
+
+  it("same tabId on different profiles is claimed separately (no cross-profile cache hit)", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_click.handler({ tabId: 7, uid: "e1", profile: "work" });
+    await tools.page_click.handler({ tabId: 7, uid: "e1", profile: "personal" });
+    const claims = calls.filter(c => c.method === "session.claim");
+    expect(claims.length).toBe(2);
+    expect(claims.map(c => c.profile).sort()).toEqual(["personal", "work"]);
+  });
+
+  it("second call to same tabId+profile skips session.claim (claim cache)", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_click.handler({ tabId: 7, uid: "e1", profile: "work" });
+    await tools.page_click.handler({ tabId: 7, uid: "e2", profile: "work" });
+    const claims = calls.filter(c => c.method === "session.claim");
+    expect(claims.length).toBe(1);
   });
 });

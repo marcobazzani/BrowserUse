@@ -8,6 +8,8 @@ export function nextBackoffMs(attempt: number): number {
 export interface WsClientOptions {
   url: string | (() => Promise<string>);
   getToken: () => Promise<string | null>;
+  /** Optional — returns the profile tag + human label to send in the hello frame. */
+  getIdentity?: () => Promise<{ profile: string; label: string } | null>;
   onStatus: (status: "connecting" | "open" | "authed" | "closed" | "badToken") => void;
 }
 
@@ -16,6 +18,7 @@ export class WsClient {
   private attempt = 0;
   private closedByUs = false;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private pendingIdentity: { profile: string; label: string } | null = null;
 
   constructor(private opts: WsClientOptions, private dispatcher: Dispatcher) {}
 
@@ -49,6 +52,9 @@ export class WsClient {
       this.opts.onStatus("badToken");
       return;
     }
+    this.pendingIdentity = this.opts.getIdentity
+      ? await this.opts.getIdentity().catch(() => null)
+      : null;
     // If a previous socket is still lingering (e.g. stop() + start() in quick
     // succession), disown it BEFORE calling close() so its close handler sees
     // this.ws !== ws and skips reconnection-scheduling.
@@ -67,8 +73,18 @@ export class WsClient {
       if (this.ws !== ws) return; // stale socket — ignore
       if (ws.readyState !== WebSocket.OPEN) return;
       this.opts.onStatus("open");
+      // Build hello synchronously; we don't await identity here because that
+      // would let the socket race ahead. We resolved it before the connect
+      // attempt (see connect() below).
+      const hello: { type: "hello"; token: string; profile?: string; label?: string } = {
+        type: "hello", token,
+      };
+      if (this.pendingIdentity) {
+        hello.profile = this.pendingIdentity.profile;
+        hello.label = this.pendingIdentity.label;
+      }
       try {
-        ws.send(JSON.stringify({ type: "hello", token }));
+        ws.send(JSON.stringify(hello));
       } catch {
         // racing close → let the close handler drive reconnect
         return;
