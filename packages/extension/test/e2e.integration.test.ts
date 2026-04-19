@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const extDir = resolve(here, "../dist");
-const serverEntry = resolve(here, "../../mcp-server/dist/index.js");
+const serverEntry = resolve(here, "../../mcp-server/dist/index.cjs");
 
 const SHOULD_RUN = process.env.BROWSERUSE_E2E === "1";
 const describeE2E = SHOULD_RUN ? describe : describe.skip;
@@ -112,6 +112,13 @@ describeE2E("end-to-end: extension in real Chromium ↔ real MCP server", () => 
     });
     await page.waitForURL(/example\.com/, { timeout: 10_000 });
 
+    // The overlay is re-injected via tabs.onUpdated after navigation completes,
+    // so it appears asynchronously — poll for it.
+    await page.waitForFunction(
+      () => !!document.querySelector('div[data-browseruse="overlay"]'),
+      undefined,
+      { timeout: 10_000 },
+    );
     const hasOverlay = await page.evaluate(
       () => !!document.querySelector('div[data-browseruse="overlay"]')
     );

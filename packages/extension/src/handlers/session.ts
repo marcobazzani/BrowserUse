@@ -70,7 +70,24 @@ async function removeOverlay(tabId: number) {
   await chrome.action.setBadgeText({ tabId, text: "" }).catch(() => {});
 }
 
+// A claimed tab's overlay lives in the page DOM, so any full navigation
+// wipes it. Re-inject on every subsequent 'complete' transition so the
+// pulsing border sticks around until the agent explicitly releases the tab.
+// Module-scope listener: re-registers automatically on MV3 SW wake-up.
+let onUpdatedRegistered = false;
+function ensureReinjectionListener(): void {
+  if (onUpdatedRegistered) return;
+  onUpdatedRegistered = true;
+  chrome.tabs.onUpdated.addListener((tabId, info) => {
+    if (info.status !== "complete") return;
+    if (!claimed.has(tabId)) return;
+    void injectOverlay(tabId);
+  });
+}
+
 export function registerSessionHandlers(d: Dispatcher) {
+  ensureReinjectionListener();
+
   d.register("session.claim", async (raw) => {
     const p = SessionClaimParamsSchema.parse(raw);
     const gid = await ensureGroup(p.tabId);
