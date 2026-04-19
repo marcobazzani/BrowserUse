@@ -41,3 +41,8 @@ If you find yourself writing "verify manually by clicking …" in a PR descripti
 - **Loopback only.** The MCP server's WebSocket binds `127.0.0.1` exclusively, and the extension refuses any non-loopback server.
 - **Token auth on the WS bridge.** Never land a change that accepts unauthenticated connections, even "temporarily for testing."
 - **Wire protocol is the single source of truth.** Both the MCP server and the extension import the same Zod schemas from `packages/shared`. A wire-method rename without a schema update is a bug.
+
+## Release policy
+
+- **Do NOT auto-version or auto-tag.** The user decides when to cut a new release. Commit code, run tests, build, and stop there. Do not bump `packages/extension/manifest.json` version, do not run `git tag`, do not `git push --tags`, do not trigger the GitHub release workflow unless the user explicitly says "ship", "release", "tag v0.x.y", or equivalent. "Fix this bug" / "add this feature" means land the code — not publish it.
+- When the user does ask for a release: bump the extension manifest version, update the README tool list if needed, tag with a conventional `vX.Y.Z`, push the tag, then watch the Release workflow. Summarise the delta in the commit and tag message.
