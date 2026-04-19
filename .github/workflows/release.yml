@@ -4,7 +4,43 @@ on:
     tags: ['v*']
 
 jobs:
+  # Gate: run the full E2E suite against the tagged commit before publishing
+  # anything. If the real-Chromium ↔ real-MCP-server contract is broken, we
+  # do NOT want artifacts on GitHub Releases.
+  e2e-gate:
+    runs-on: ubuntu-latest
+    env:
+      BROWSERUSE_E2E: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm -F @browseruse/extension exec playwright install --with-deps chromium
+
+      - name: run e2e under xvfb
+        run: xvfb-run -a pnpm -F @browseruse/extension test:integration
+
+      - name: upload Playwright artefacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artefacts-${{ github.ref_name }}
+          path: |
+            packages/extension/test-results
+            packages/extension/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
   release:
+    needs: e2e-gate
     runs-on: ubuntu-latest
     permissions:
       contents: write
