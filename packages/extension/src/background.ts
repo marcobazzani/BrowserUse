@@ -29,28 +29,65 @@ async function getServerUrl(): Promise<string> {
 }
 
 /**
- * Stable per-profile identifier. chrome.runtime.id is unique per extension
- * install; since the extension is installed independently in each Chrome
- * profile, the id differs per profile. We hash it so it's opaque and
- * bounded in length. The human-facing label defaults to the Google account
- * email (when `identity` permission is granted) or a user-set override.
+ * Stable per-profile identifier.
+ *
+ * We cannot use chrome.runtime.id: for unpacked extensions Chrome derives the
+ * extension ID from the ON-DISK path of the unpacked folder, not per-profile.
+ * Two Chrome profiles that "Load unpacked" the same /dist directory end up
+ * sharing an extension ID — which would collapse them into one bridge slot
+ * and cause takeover flicker.
+ *
+ * Preferred: chrome.identity.getProfileUserInfo() returns the Chrome profile's
+ * signed-in Google account (email + stable Gaia ID). That's Chrome-provided,
+ * distinct per profile, and gives us a readable label for free.
+ *
+ * Fallback: a random tag minted on first run, persisted in
+ * chrome.storage.local (which IS profile-scoped). Used for guest / not-signed-
+ * in profiles where getProfileUserInfo returns empty.
+ *
+ * Either way, the user-set label from the popup takes priority over the
+ * auto-derived label.
  */
 async function getIdentity(): Promise<{ profile: string; label: string } | null> {
   try {
-    const id = chrome.runtime.id;
-    const encoded = new TextEncoder().encode(id);
-    const digest = await crypto.subtle.digest("SHA-256", encoded);
-    const hex = Array.from(new Uint8Array(digest))
-      .map((b) => (b ?? 0).toString(16).padStart(2, "0"))
-      .join("");
-    const profile = `p-${hex.slice(0, 12)}`;
+    const stored = await chrome.storage.local.get(["profileTag", "profileLabel"]);
 
-    // Label: prefer user override (set via popup) > profile tag prefix.
-    const { profileLabel } = await chrome.storage.local.get(["profileLabel"]);
+    // First: ask Chrome for the signed-in profile's account info.
+    let accountEmail = "";
+    let accountId = "";
+    try {
+      const info = await new Promise<chrome.identity.ProfileUserInfo | undefined>((resolve) => {
+        chrome.identity.getProfileUserInfo((i) => resolve(i));
+      });
+      accountEmail = info?.email ?? "";
+      accountId = info?.id ?? "";
+    } catch {
+      // identity permission missing, or API unavailable — fall through to random UUID.
+    }
+
+    let profile: string;
+    if (accountId) {
+      // Chrome-provided, distinct per profile, stable. Prefix distinguishes
+      // it from the random fallback.
+      profile = `g-${accountId.slice(0, 16)}`;
+    } else {
+      // Fallback: random tag stored in profile-scoped storage. Mint on first run.
+      if (typeof stored.profileTag === "string" && stored.profileTag.length >= 10) {
+        profile = stored.profileTag;
+      } else {
+        const random = crypto.getRandomValues(new Uint8Array(8));
+        const hex = Array.from(random).map((b) => b.toString(16).padStart(2, "0")).join("");
+        profile = `p-${hex}`;
+        await chrome.storage.local.set({ profileTag: profile });
+      }
+    }
+
+    // Label: user override > account email > tag prefix.
     const label =
-      typeof profileLabel === "string" && profileLabel.trim()
-        ? profileLabel.trim().slice(0, 64)
-        : profile.slice(0, 12);
+      typeof stored.profileLabel === "string" && stored.profileLabel.trim()
+        ? stored.profileLabel.trim().slice(0, 64)
+        : accountEmail || profile.slice(0, 12);
+
     return { profile, label };
   } catch {
     return null;

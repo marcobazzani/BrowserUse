@@ -36,18 +36,40 @@ async function deriveLocal() {
   return { token, port, tz, platform };
 }
 
-async function deriveProfileTag() {
-  const id = chrome.runtime.id;
-  const encoded = new TextEncoder().encode(id);
-  const digest = await crypto.subtle.digest("SHA-256", encoded);
-  const hex = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
-  return `p-${hex.slice(0, 12)}`;
+/**
+ * Resolve the profile tag + auto label. Mirrors background.ts getIdentity():
+ *   1. chrome.identity.getProfileUserInfo() for signed-in profiles (preferred)
+ *   2. random UUID in chrome.storage.local (fallback)
+ */
+async function resolveIdentity() {
+  let accountEmail = "";
+  let accountId = "";
+  try {
+    const info = await new Promise((resolve) => {
+      chrome.identity.getProfileUserInfo((i) => resolve(i));
+    });
+    accountEmail = info?.email ?? "";
+    accountId = info?.id ?? "";
+  } catch {}
+
+  if (accountId) {
+    return { profile: `g-${accountId.slice(0, 16)}`, autoLabel: accountEmail };
+  }
+  const { profileTag: stored } = await chrome.storage.local.get(["profileTag"]);
+  if (typeof stored === "string" && stored.length >= 10) {
+    return { profile: stored, autoLabel: "" };
+  }
+  const random = crypto.getRandomValues(new Uint8Array(8));
+  const hex = Array.from(random).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const profile = `p-${hex}`;
+  await chrome.storage.local.set({ profileTag: profile });
+  return { profile, autoLabel: "" };
 }
 
 async function refresh() {
   const { status, token: overrideToken, port: overridePort, profileLabel } =
     await chrome.storage.local.get(["status", "token", "port", "profileLabel"]);
-  const profileTag = await deriveProfileTag();
+  const { profile: profileTag, autoLabel } = await resolveIdentity();
   profileLabelEl.value = typeof profileLabel === "string" ? profileLabel : "";
   const derived = await deriveLocal();
   const effToken = overrideToken || derived.token;
@@ -56,7 +78,7 @@ async function refresh() {
   statusEl.textContent = `Status: ${status ?? "unknown"}`;
   const labelDisplay = (typeof profileLabel === "string" && profileLabel.trim())
     ? profileLabel.trim()
-    : profileTag.slice(0, 12);
+    : autoLabel || profileTag.slice(0, 12);
   pairingEl.textContent =
     `Pairing: ${overrideToken ? "override" : "auto"} · port ${effPort} · token ${effToken.slice(0, 8)}… · profile ${profileTag} (${labelDisplay})`;
 
