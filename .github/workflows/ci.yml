@@ -6,11 +6,13 @@ on:
 
 jobs:
   test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    # Ubuntu only. The codebase has no platform-specific behaviour (Intl,
+    # crypto.subtle, node:path, node:os are stable across OSes) and we
+    # explicitly don't target Windows. macOS runners cost 10× toward the
+    # Actions budget and add nothing — developers exercise the code on
+    # their own macs locally, and the E2E workflow (release-gate and
+    # nightly) also runs on Ubuntu.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
