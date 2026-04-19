@@ -11,6 +11,24 @@ export const ClientHelloSchema = z.object({
 });
 export type ClientHello = z.infer<typeof ClientHelloSchema>;
 
+/** First frame from an MCP proxy (secondary Claude Code session) to the hub. */
+export const ProxyHelloSchema = z.object({
+  type: z.literal("mcp-proxy-hello"),
+  token: z.string().min(8),
+}).strict();
+
+/** Proxy → hub: forwarded MCP request (JSON-RPC body from Claude Code's stdio). */
+export const ProxyRequestFrameSchema = z.object({
+  type: z.literal("mcp-request"),
+  msg: z.unknown(),
+}).strict();
+
+/** Hub → proxy: the matching MCP response (JSON-RPC body to send back on stdio). */
+export const ProxyResponseFrameSchema = z.object({
+  type: z.literal("mcp-response"),
+  msg: z.unknown(),
+}).strict();
+
 /** Entry returned by list_profiles. */
 export const ProfileInfoSchema = z.object({
   tag: z.string(),

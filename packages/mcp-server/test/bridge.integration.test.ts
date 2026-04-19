@@ -124,6 +124,70 @@ describe("BridgeServer integration", () => {
     wsB.close();
   });
 
+  it("accepts an mcp-proxy-hello and hands off to the registered handler", async () => {
+    const handoff = vi.fn();
+    server.setProxyHandler((ws) => handoff(ws));
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((r) => ws.once("open", () => r()));
+    ws.send(JSON.stringify({ type: "mcp-proxy-hello", token: "secret-token" }));
+
+    await vi.waitFor(() => expect(handoff).toHaveBeenCalledTimes(1));
+    const [receivedWs] = handoff.mock.calls[0]!;
+    expect(receivedWs.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+
+  it("closes an mcp-proxy-hello with wrong token (4003)", async () => {
+    server.setProxyHandler(() => { /* would be invoked on success */ });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((r) => ws.once("open", () => r()));
+    ws.send(JSON.stringify({ type: "mcp-proxy-hello", token: "WRONG" }));
+    const code = await new Promise<number>((r) => ws.once("close", (c) => r(c)));
+    expect(code).toBe(4003);
+  });
+
+  it("closes an mcp-proxy-hello (4011) when no handler is registered", async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((r) => ws.once("open", () => r()));
+    ws.send(JSON.stringify({ type: "mcp-proxy-hello", token: "secret-token" }));
+    const code = await new Promise<number>((r) => ws.once("close", (c) => r(c)));
+    expect(code).toBe(4011);
+  });
+
+  it("after proxy handoff the socket is not in the extensions map", async () => {
+    let handedOffWs: WebSocket | undefined;
+    server.setProxyHandler((ws) => { handedOffWs = ws as unknown as WebSocket; });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((r) => ws.once("open", () => r()));
+    ws.send(JSON.stringify({ type: "mcp-proxy-hello", token: "secret-token" }));
+    await vi.waitFor(() => expect(handedOffWs).toBeDefined());
+
+    expect(server.listProfiles()).toEqual([]);
+    expect(server.isConnected()).toBe(false);
+    ws.close();
+  });
+
+  it("regular extension hello still works after a failed proxy hello on a different socket", async () => {
+    const bad = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((r) => bad.once("open", () => r()));
+    bad.send(JSON.stringify({ type: "mcp-proxy-hello", token: "WRONG" }));
+    await new Promise<void>((r) => bad.once("close", () => r()));
+
+    const good = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((r) => good.once("open", () => r()));
+    good.send(JSON.stringify({ type: "hello", token: "secret-token", profile: "work" }));
+    good.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      if (req.method) good.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: { ok: true } }));
+    });
+    await vi.waitFor(() => { if (!server.isConnected()) throw new Error("not authed"); });
+    const r = await server.call("tabs.list", {}, "work");
+    expect(r).toEqual({ ok: true });
+    good.close();
+  });
+
   it("ignores {type:'ping'} frames after auth without breaking pending calls", async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     await new Promise<void>((r) => ws.once("open", () => r()));

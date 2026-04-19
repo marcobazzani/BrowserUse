@@ -2,11 +2,14 @@ import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   ClientHelloSchema,
+  ProxyHelloSchema,
   RpcRequestSchema,
   RpcResponseSchema,
   type RpcResponse,
   type ProfileInfo,
 } from "@browseruse/shared";
+
+export type ProxyHandler = (ws: WebSocket) => void;
 
 export interface Correlator {
   register<T = unknown>(id: number): Promise<T>;
@@ -74,10 +77,21 @@ export class BridgeServer {
   private extensions = new Map<string, ExtensionEntry>();
   private token: string;
   private timeoutMs: number;
+  private proxyHandler?: ProxyHandler;
 
   constructor(opts: { token: string; timeoutMs: number }) {
     this.token = opts.token;
     this.timeoutMs = opts.timeoutMs;
+  }
+
+  /**
+   * Register a callback invoked whenever a follower Claude Code session's MCP
+   * proxy authenticates. The caller is expected to adopt the socket and run an
+   * MCP Server on it (see WebSocketServerTransport). If no handler is set,
+   * proxy connections are rejected.
+   */
+  setProxyHandler(handler: ProxyHandler): void {
+    this.proxyHandler = handler;
   }
 
   async listen(port: number): Promise<number> {
@@ -114,6 +128,30 @@ export class BridgeServer {
         return;
       }
       if (!authed) {
+        // Try proxy-hello first: follower Claude Code sessions use this to
+        // adopt their MCP stdio onto this hub's tool registry.
+        const proxy = ProxyHelloSchema.safeParse(parsed);
+        if (proxy.success) {
+          const expected = Buffer.from(this.token, "utf8");
+          const actual = Buffer.from(proxy.data.token, "utf8");
+          const match =
+            expected.length === actual.length && timingSafeEqual(expected, actual);
+          if (!match) {
+            ws.close(4003, "bad token");
+            return;
+          }
+          if (!this.proxyHandler) {
+            ws.close(4011, "proxy not supported on this hub");
+            return;
+          }
+          clearTimeout(authTimer);
+          authed = true;
+          // Remove our message listeners — ownership transfers to proxy handler.
+          ws.removeAllListeners("message");
+          ws.removeAllListeners("close");
+          this.proxyHandler(ws);
+          return;
+        }
         const hello = ClientHelloSchema.safeParse(parsed);
         if (!hello.success) {
           ws.close(4003, "bad token");
