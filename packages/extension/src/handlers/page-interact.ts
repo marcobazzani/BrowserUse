@@ -17,13 +17,26 @@ import { takeA11ySnapshot } from "./page-read.js";
 
 /* ---------- helpers ---------- */
 
-/** Resolve a uid to a CDP objectId for the target tab. */
+interface ResolvedElement {
+  objectId: string;
+  /** undefined = main tab frame; otherwise the OOPIF's CDP targetId. */
+  targetId?: string;
+}
+
+/**
+ * Resolve a uid to a CDP objectId.
+ *
+ * uid-based resolution picks up the element's target from the snapshot,
+ * so elements inside OOPIFs route to their own CDP session. Selector-based
+ * resolution always queries the main frame — selectors don't cross
+ * iframe boundaries, and we don't want to introduce a surprise traversal.
+ */
 async function resolveElement(
   mgr: DebuggerManager,
   tabId: number,
   uid?: string,
   selector?: string,
-): Promise<{ objectId: string }> {
+): Promise<ResolvedElement> {
   if (uid) {
     const entry = resolveUid(tabId, uid);
     if (!entry) throw new Error(`uid "${uid}" not found — take a new snapshot first`);
@@ -31,9 +44,10 @@ async function resolveElement(
       tabId,
       "DOM.resolveNode",
       { backendNodeId: entry.backendNodeId },
+      entry.targetId,
     );
     if (!r.object?.objectId) throw new Error(`uid "${uid}" could not be resolved to a DOM node`);
-    return { objectId: r.object.objectId };
+    return { objectId: r.object.objectId, targetId: entry.targetId };
   }
   if (selector) {
     // Get document root, then querySelector.
@@ -55,22 +69,30 @@ async function resolveElement(
   throw new Error("provide either uid or selector");
 }
 
-/** Get the center coordinates of an element for CDP mouse events. */
+/**
+ * Get the center coordinates of an element for CDP mouse events.
+ *
+ * Coords are session-local: when `targetId` is set, x/y are relative to
+ * the iframe's viewport and the caller must dispatch mouse events on
+ * the same session for them to land.
+ */
 async function getElementCenter(
   mgr: DebuggerManager,
   tabId: number,
   objectId: string,
+  targetId?: string,
 ): Promise<{ x: number; y: number }> {
   // scrollIntoViewIfNeeded first.
   await mgr.sendCommand(tabId, "Runtime.callFunctionOn", {
     objectId,
     functionDeclaration: `function() { this.scrollIntoViewIfNeeded(true); }`,
     returnByValue: true,
-  });
+  }, targetId);
   const box = await mgr.sendCommand<{ model: { content: number[] } }>(
     tabId,
     "DOM.getBoxModel",
     { objectId },
+    targetId,
   );
   // content quad: [x1,y1, x2,y2, x3,y3, x4,y4]
   const q = box.model.content;
@@ -120,21 +142,23 @@ async function coordinateClick(
   mgr: DebuggerManager,
   tabId: number,
   objectId: string,
+  targetId?: string,
 ): Promise<void> {
   const box = await mgr.sendCommand<{ model: { content: number[] } }>(
     tabId,
     "DOM.getBoxModel",
     { objectId },
+    targetId,
   );
   const q = box.model.content;
   const x = (q[0] + q[2] + q[4] + q[6]) / 4;
   const y = (q[1] + q[3] + q[5] + q[7]) / 4;
   await mgr.sendCommand(tabId, "Input.dispatchMouseEvent", {
     type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1,
-  });
+  }, targetId);
   await mgr.sendCommand(tabId, "Input.dispatchMouseEvent", {
     type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1,
-  });
+  }, targetId);
 }
 
 // In-page scroll function (self-contained, no closures).
@@ -207,15 +231,15 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
   d.register("page.click", async (raw) => {
     const p = PageClickParamsSchema.parse(raw);
     const el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
-    const { x, y } = await getElementCenter(mgr, p.tabId, el.objectId);
+    const { x, y } = await getElementCenter(mgr, p.tabId, el.objectId, el.targetId);
     const btn = p.button === "right" ? 2 : p.button === "middle" ? 1 : 0;
     const btnName = p.button === "right" ? "right" : p.button === "middle" ? "middle" : "left";
     await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
       type: "mousePressed", x, y, button: btnName, buttons: 1 << btn, clickCount: 1,
-    });
+    }, el.targetId);
     await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
       type: "mouseReleased", x, y, button: btnName, buttons: 0, clickCount: 1,
-    });
+    }, el.targetId);
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, snapshot };
   });
@@ -238,12 +262,12 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
         objectId: el.objectId,
         functionDeclaration: `function() { this.focus(); }`,
         returnByValue: true,
-      });
+      }, el.targetId);
     } catch (e) {
       if (!isCrossExtensionError(e)) throw translateCdpError(e);
       usedFallback = true;
       try {
-        await coordinateClick(mgr, p.tabId, el.objectId);
+        await coordinateClick(mgr, p.tabId, el.objectId, el.targetId);
       } catch (ce) {
         throw translateCdpError(ce);
       }
@@ -257,16 +281,18 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
           else if (this.isContentEditable) { this.textContent = ''; }
         }`,
         returnByValue: true,
-      }).catch((e) => { if (!isCrossExtensionError(e)) throw translateCdpError(e); });
+      }, el.targetId).catch((e) => { if (!isCrossExtensionError(e)) throw translateCdpError(e); });
     }
     // In fallback mode we can't read the field; a Ctrl/Cmd+A + Delete keyboard
     // sequence would clear but is platform-dependent — we skip clear rather
     // than risk firing the wrong key combo. Most login fields are empty anyway.
 
     // Type via CDP insertText for framework compatibility. Targets the focused
-    // element — works in both the normal and fallback paths.
+    // element — works in both the normal and fallback paths. For iframe
+    // elements we route to the iframe session so insertText lands in the
+    // iframe's focused node, not whatever (if anything) has focus on top.
     try {
-      await mgr.sendCommand(p.tabId, "Input.insertText", { text: p.text });
+      await mgr.sendCommand(p.tabId, "Input.insertText", { text: p.text }, el.targetId);
     } catch (e) {
       throw translateCdpError(e);
     }
@@ -276,7 +302,7 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
         objectId: el.objectId,
         functionDeclaration: `function() { if (this.form) this.form.requestSubmit(); }`,
         returnByValue: true,
-      }).catch((e) => { if (!isCrossExtensionError(e)) throw translateCdpError(e); });
+      }, el.targetId).catch((e) => { if (!isCrossExtensionError(e)) throw translateCdpError(e); });
     }
 
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
@@ -298,10 +324,10 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
   d.register("page.hover", async (raw) => {
     const p = PageHoverParamsSchema.parse(raw);
     const el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
-    const { x, y } = await getElementCenter(mgr, p.tabId, el.objectId);
+    const { x, y } = await getElementCenter(mgr, p.tabId, el.objectId, el.targetId);
     await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x, y,
-    });
+    }, el.targetId);
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, snapshot };
   });
@@ -347,18 +373,18 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
             else if (this.isContentEditable) { this.textContent = ''; }
           }`,
           returnByValue: true,
-        });
+        }, el.targetId);
       } catch (e) {
         if (!isCrossExtensionError(e)) throw translateCdpError(e);
         usedFallback = true;
         try {
-          await coordinateClick(mgr, p.tabId, el.objectId);
+          await coordinateClick(mgr, p.tabId, el.objectId, el.targetId);
         } catch (ce) {
           throw translateCdpError(ce);
         }
       }
       try {
-        await mgr.sendCommand(p.tabId, "Input.insertText", { text: field.value });
+        await mgr.sendCommand(p.tabId, "Input.insertText", { text: field.value }, el.targetId);
       } catch (e) {
         throw translateCdpError(e);
       }
@@ -373,7 +399,7 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
         objectId: el.objectId,
         functionDeclaration: `function() { if (this.form) this.form.requestSubmit(); }`,
         returnByValue: true,
-      }).catch((e) => { if (!isCrossExtensionError(e)) throw translateCdpError(e); });
+      }, el.targetId).catch((e) => { if (!isCrossExtensionError(e)) throw translateCdpError(e); });
     }
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, filledCount: filled, snapshot };
@@ -425,6 +451,7 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
         arguments: [{ value: p.values }],
         returnByValue: true,
       },
+      el.targetId,
     );
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, selected: result.result.value ?? [], snapshot };
@@ -436,7 +463,7 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     await mgr.sendCommand(p.tabId, "DOM.setFileInputFiles", {
       files: p.filePaths,
       objectId: el.objectId,
-    });
+    }, el.targetId);
     // Dispatch input/change so frameworks notice the file list changed.
     await mgr.sendCommand(p.tabId, "Runtime.callFunctionOn", {
       objectId: el.objectId,
@@ -445,7 +472,7 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
         this.dispatchEvent(new Event('change', { bubbles: true }));
       }`,
       returnByValue: true,
-    });
+    }, el.targetId);
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, uploadedCount: p.filePaths.length, snapshot };
   });
@@ -454,15 +481,24 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     const p = PageDragParamsSchema.parse(raw);
     const from = await resolveElement(mgr, p.tabId, p.fromUid, p.fromSelector);
     const to = await resolveElement(mgr, p.tabId, p.toUid, p.toSelector);
-    const fromC = await getElementCenter(mgr, p.tabId, from.objectId);
-    const toC = await getElementCenter(mgr, p.tabId, to.objectId);
+    // Drag across frame boundaries would need per-event coordinate translation
+    // into whichever frame the pointer is currently inside. We don't support
+    // that; require both endpoints in the same frame (including both == main).
+    if (from.targetId !== to.targetId) {
+      throw new Error(
+        "page.drag endpoints live in different frames; cross-frame drag is not supported",
+      );
+    }
+    const dragTarget = from.targetId;
+    const fromC = await getElementCenter(mgr, p.tabId, from.objectId, dragTarget);
+    const toC = await getElementCenter(mgr, p.tabId, to.objectId, dragTarget);
     const targetX = toC.x + (p.toOffsetX ?? 0);
     const targetY = toC.y + (p.toOffsetY ?? 0);
 
     // Press at source.
     await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
       type: "mousePressed", x: fromC.x, y: fromC.y, button: "left", buttons: 1, clickCount: 1,
-    });
+    }, dragTarget);
     // Move in steps (HTML5 drag needs multiple move events between press and release).
     for (let i = 1; i <= p.steps; i++) {
       const t = i / p.steps;
@@ -470,12 +506,12 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
       const y = fromC.y + (targetY - fromC.y) * t;
       await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
         type: "mouseMoved", x, y, button: "left", buttons: 1,
-      });
+      }, dragTarget);
     }
     // Release at target.
     await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
       type: "mouseReleased", x: targetX, y: targetY, button: "left", buttons: 0, clickCount: 1,
-    });
+    }, dragTarget);
 
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, snapshot };
