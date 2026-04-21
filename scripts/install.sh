@@ -105,6 +105,43 @@ EOF
   CLAUDE_STATUS="manual"
 fi
 
+# --- Register with OpenCode -------------------------------------------------
+OC_CFG="${HOME}/.opencode/config.json"
+OPENCODE_STATUS="skip"
+if command -v opencode >/dev/null 2>&1; then
+  if command -v jq >/dev/null 2>&1; then
+    _note "Registering MCP server with OpenCode..."
+    mkdir -p "$(dirname "$OC_CFG")"
+    if [ -f "$OC_CFG" ]; then
+      TMP_CFG="$(mktemp)"
+      jq --arg n "node" --arg e "$ENTRY" \
+        '.mcp.browseruse = {"type":"local","command":[$n,$e],"enabled":true}' \
+        "$OC_CFG" > "$TMP_CFG" && mv "$TMP_CFG" "$OC_CFG"
+    else
+      jq -n --arg n "node" --arg e "$ENTRY" \
+        '{"mcp":{"browseruse":{"type":"local","command":[$n,$e],"enabled":true}}}' \
+        > "$OC_CFG"
+    fi
+    OPENCODE_STATUS="registered"
+  else
+    _warn "'jq' not found — cannot auto-update OpenCode config. Add manually to ${OC_CFG}:"
+    cat <<EOF
+
+{
+  "mcp": {
+    "browseruse": {
+      "type": "local",
+      "command": ["node", "${ENTRY}"],
+      "enabled": true
+    }
+  }
+}
+
+EOF
+    OPENCODE_STATUS="manual"
+  fi
+fi
+
 # --- Final instructions ------------------------------------------------------
 cat <<EOF
 
@@ -122,7 +159,7 @@ cat <<EOF
   3. Click "Load unpacked" and select:
        ${EXT_DIR}
   4. Pin the BrowserUse toolbar icon (puzzle-piece menu → pin)
-  5. Start Claude Code and try:
+  5. Start Claude Code or OpenCode and try:
        "open https://example.com in a new tab and tell me the title"
 
   Pairing is automatic — the extension and MCP server derive a matching
@@ -135,4 +172,7 @@ EOF
 
 if [ "$CLAUDE_STATUS" = "manual" ]; then
   _warn "You still need to add the MCP server entry to ~/.claude/settings.json (see above)."
+fi
+if [ "$OPENCODE_STATUS" = "manual" ]; then
+  _warn "You still need to add the MCP server entry to ${OC_CFG} (see above)."
 fi
