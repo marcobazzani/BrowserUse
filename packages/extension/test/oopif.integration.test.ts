@@ -159,12 +159,19 @@ describeE2E("OOPIF: content inside a cross-origin iframe is visible and interact
       return tabs[0]!.id!;
     });
 
-    const snap = await mcpClient.callTool({
-      name: "page_snapshot",
-      arguments: { tabId, mode: "a11y" },
-    });
-    const snapText = snap.content[0]!.text as string;
-    const parsed = JSON.parse(snapText) as { content: string };
+    // Poll for the OOPIF subtree to appear. Target.attachedToTarget arrives
+    // via IPC asynchronously after the iframe DOM is ready, so the first
+    // snapshot may not yet include it on slower CI runners.
+    let parsed: { content: string } = { content: "" };
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const snap = await mcpClient.callTool({
+        name: "page_snapshot",
+        arguments: { tabId, mode: "a11y" },
+      });
+      parsed = JSON.parse(snap.content[0]!.text as string) as { content: string };
+      if (/Inner iframe button/.test(parsed.content)) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
 
     // The inner button lives inside a cross-origin iframe; it should appear
     // in the merged tree thanks to OOPIF support.

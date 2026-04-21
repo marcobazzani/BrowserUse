@@ -138,8 +138,10 @@ export class DebuggerManager {
    */
   async syncFrameTargets(tabId: number): Promise<void> {
     if (!this.attached.has(tabId)) return;
-    // Wait for any in-flight attachFrameTarget chains kicked off in onEvent
-    // to settle. They're fire-and-forget promises tracked on this.pendingFrameAttach.
+    // Yield to the macrotask queue so any pending Target.attachedToTarget
+    // notifications (which arrive via IPC as macrotasks after
+    // Target.setAutoAttach resolves) can fire and queue attach work.
+    await new Promise<void>((r) => setTimeout(r, 0));
     const pending = this.pendingFrameAttach.get(tabId);
     if (pending && pending.size > 0) {
       await Promise.allSettled([...pending]);
