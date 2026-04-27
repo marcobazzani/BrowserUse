@@ -225,6 +225,57 @@ function modifierFlags(mods: string[]): number {
   return flags;
 }
 
+/**
+ * Send a single key (keyDown + keyUp) via CDP. Targets the focused element
+ * in either the tab session or an OOPIF frame session (when targetId given).
+ * Real keyboard events — required for apps that don't honor Input.insertText
+ * (Office365 / Excel for the Web, Google Sheets, anything with custom input
+ * pipelines).
+ */
+async function dispatchKey(
+  mgr: DebuggerManager,
+  tabId: number,
+  kd: { key: string; code: string; keyCode: number; text?: string },
+  modifiers: number,
+  targetId?: string,
+): Promise<void> {
+  await mgr.sendCommand(tabId, "Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: kd.key,
+    code: kd.code,
+    windowsVirtualKeyCode: kd.keyCode,
+    nativeVirtualKeyCode: kd.keyCode,
+    modifiers,
+    text: kd.text,
+  }, targetId);
+  await mgr.sendCommand(tabId, "Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: kd.key,
+    code: kd.code,
+    windowsVirtualKeyCode: kd.keyCode,
+    nativeVirtualKeyCode: kd.keyCode,
+    modifiers,
+  }, targetId);
+}
+
+/**
+ * Build a CDP key descriptor for a single character. Mirrors what
+ * resolveKey does for single chars, plus a few common control mappings
+ * (\n → Enter, \t → Tab) that page_type callers tend to embed in text.
+ */
+function charToKeyDef(ch: string): { key: string; code: string; keyCode: number; text?: string } {
+  if (ch === "\n" || ch === "\r") return KEY_DEFS.Enter!;
+  if (ch === "\t") return KEY_DEFS.Tab!;
+  // Letters → KeyX; digits → DigitX; everything else falls back to the char
+  // itself as code, which most apps tolerate (they read event.key/event.data).
+  const upper = ch.toUpperCase();
+  let code = ch;
+  if (/^[A-Z]$/.test(upper)) code = `Key${upper}`;
+  else if (/^[0-9]$/.test(ch)) code = `Digit${ch}`;
+  else if (ch === " ") code = "Space";
+  return { key: ch, code, keyCode: upper.charCodeAt(0), text: ch };
+}
+
 /* ---------- handlers ---------- */
 
 export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager) {
@@ -287,12 +338,15 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     // sequence would clear but is platform-dependent — we skip clear rather
     // than risk firing the wrong key combo. Most login fields are empty anyway.
 
-    // Type via CDP insertText for framework compatibility. Targets the focused
-    // element — works in both the normal and fallback paths. For iframe
-    // elements we route to the iframe session so insertText lands in the
-    // iframe's focused node, not whatever (if anything) has focus on top.
+    // Type as real keystrokes (keyDown + keyUp per char) via CDP.
+    // Input.insertText would be faster but it bypasses the keyboard event
+    // pipeline that some apps (Office365 / Excel for the Web, Google Sheets,
+    // Figma, anything with custom input handling) rely on to commit values.
+    // Real keystrokes work in both standard inputs and these custom surfaces.
     try {
-      await mgr.sendCommand(p.tabId, "Input.insertText", { text: p.text }, el.targetId);
+      for (const ch of p.text) {
+        await dispatchKey(mgr, p.tabId, charToKeyDef(ch), 0, el.targetId);
+      }
     } catch (e) {
       throw translateCdpError(e);
     }
@@ -334,25 +388,7 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
 
   d.register("page.pressKey", async (raw) => {
     const p = PagePressKeyParamsSchema.parse(raw);
-    const kd = resolveKey(p.key);
-    const flags = modifierFlags(p.modifiers);
-    await mgr.sendCommand(p.tabId, "Input.dispatchKeyEvent", {
-      type: "keyDown",
-      key: kd.key,
-      code: kd.code,
-      windowsVirtualKeyCode: kd.keyCode,
-      nativeVirtualKeyCode: kd.keyCode,
-      modifiers: flags,
-      text: kd.text,
-    });
-    await mgr.sendCommand(p.tabId, "Input.dispatchKeyEvent", {
-      type: "keyUp",
-      key: kd.key,
-      code: kd.code,
-      windowsVirtualKeyCode: kd.keyCode,
-      nativeVirtualKeyCode: kd.keyCode,
-      modifiers: flags,
-    });
+    await dispatchKey(mgr, p.tabId, resolveKey(p.key), modifierFlags(p.modifiers));
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, snapshot };
   });
@@ -384,7 +420,9 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
         }
       }
       try {
-        await mgr.sendCommand(p.tabId, "Input.insertText", { text: field.value }, el.targetId);
+        for (const ch of field.value) {
+          await dispatchKey(mgr, p.tabId, charToKeyDef(ch), 0, el.targetId);
+        }
       } catch (e) {
         throw translateCdpError(e);
       }

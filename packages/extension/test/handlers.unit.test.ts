@@ -230,17 +230,29 @@ describe("handlers", () => {
   });
 
   // --- page.type (CDP-based) ---
-  it("page.type with uid focuses and inserts text via CDP", async () => {
+  it("page.type with uid focuses and types each character as a real keystroke", async () => {
     const uids = await snapshotUids(1);
     state.debuggerState.commands = [];
+    const text = "hello@test.com";
     const resp = await d.handle({
       jsonrpc: "2.0", id: 81, method: "page.type",
-      params: { tabId: 1, uid: uids[1], text: "hello@test.com" },
+      params: { tabId: 1, uid: uids[1], text },
     });
     expect((resp.result as any).ok).toBe(true);
+    // Real keystrokes (not Input.insertText) — required for apps that
+    // bypass standard text-insertion (Office365, Excel, Sheets, Figma).
+    const keyEvents = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchKeyEvent");
+    expect(keyEvents.length).toBe(text.length * 2); // keyDown + keyUp per char
+    expect(keyEvents[0].params.type).toBe("keyDown");
+    expect(keyEvents[0].params.key).toBe("h");
+    expect(keyEvents[0].params.text).toBe("h");
+    expect(keyEvents[1].params.type).toBe("keyUp");
+    // Reconstruct the text from the keyDown events.
+    const typed = keyEvents.filter((c: any) => c.params.type === "keyDown").map((c: any) => c.params.key).join("");
+    expect(typed).toBe(text);
+    // No Input.insertText anymore.
     const insertCalls = state.debuggerState.commands.filter((c: any) => c.method === "Input.insertText");
-    expect(insertCalls.length).toBe(1);
-    expect(insertCalls[0].params.text).toBe("hello@test.com");
+    expect(insertCalls.length).toBe(0);
   });
 
   // --- page.hover ---
@@ -288,8 +300,12 @@ describe("handlers", () => {
     });
     expect((resp.result as any).ok).toBe(true);
     expect((resp.result as any).filledCount).toBe(2);
+    // Real keystrokes per char across both fields: "Alice" + "alice@example.com"
+    // = 22 chars × 2 events (keyDown + keyUp).
+    const keyEvents = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchKeyEvent");
+    expect(keyEvents.length).toBe(("Alice".length + "alice@example.com".length) * 2);
     const insertCalls = state.debuggerState.commands.filter((c: any) => c.method === "Input.insertText");
-    expect(insertCalls.length).toBe(2);
+    expect(insertCalls.length).toBe(0);
   });
 
   // --- page.scroll ---
@@ -423,9 +439,9 @@ describe("handlers", () => {
     });
     // Should succeed via fallback
     expect((resp.result as any).ok).toBe(true);
-    // insertText must still have run
+    // Real keystrokes must still have run after the coordinate-click fallback.
     const calls = ((globalThis as any).chrome.debugger.sendCommand as any).mock.calls.map((a: any[]) => a[1]);
-    expect(calls).toContain("Input.insertText");
+    expect(calls).toContain("Input.dispatchKeyEvent");
     // Coordinate-click (mousePressed + mouseReleased) must have been used
     const mouseEvents = ((globalThis as any).chrome.debugger.sendCommand as any).mock.calls
       .filter((a: any[]) => a[1] === "Input.dispatchMouseEvent")
