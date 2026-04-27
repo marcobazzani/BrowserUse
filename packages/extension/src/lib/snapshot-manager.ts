@@ -71,8 +71,13 @@ interface AXTreeResult {
 }
 
 interface FrameSubtree {
-  /** backendNodeId of the iframe ELEMENT in the parent document. */
+  /** backendNodeId of the iframe ELEMENT in the parent document. Valid in
+   *  the parent SESSION's id space — i.e. the tab session for top-level
+   *  iframes, or the parent OOPIF's session for nested ones. */
   ownerBackendNodeId: number;
+  /** The session whose id space ownerBackendNodeId is valid in. undefined =
+   *  tab session; otherwise the parent OOPIF target id. */
+  parentTargetId?: string;
   targetId: string;
   nodes: AXNode[];
 }
@@ -107,8 +112,10 @@ export async function captureA11ySnapshot(
   await mgr.sendCommand(tabId, "Accessibility.enable", {});
   const main = await mgr.sendCommand<AXTreeResult>(tabId, "Accessibility.getFullAXTree", {});
 
-  // Pull every OOPIF subtree and key it by the backendNodeId of its owning
-  // iframe in the parent document.
+  // Pull every OOPIF subtree. For each frame, DOM.getFrameOwner must be
+  // invoked on the PARENT session — the only one whose process contains
+  // the owner iframe element. Top-level OOPIFs have parentTargetId
+  // undefined (parent = tab session); nested ones have a parent OOPIF.
   const frameTrees: FrameSubtree[] = [];
   for (const f of mgr.getFrameTargets(tabId)) {
     try {
@@ -116,6 +123,7 @@ export async function captureA11ySnapshot(
         tabId,
         "DOM.getFrameOwner",
         { frameId: f.targetId },
+        f.parentTargetId, // <-- key fix for nested OOPIFs
       );
       const sub = await mgr.sendCommand<AXTreeResult>(
         tabId,
@@ -125,6 +133,7 @@ export async function captureA11ySnapshot(
       );
       frameTrees.push({
         ownerBackendNodeId: owner.backendNodeId,
+        parentTargetId: f.parentTargetId,
         targetId: f.targetId,
         nodes: sub.nodes,
       });
@@ -135,8 +144,22 @@ export async function captureA11ySnapshot(
     }
   }
 
-  const frameByOwner = new Map<number, FrameSubtree>();
-  for (const sub of frameTrees) frameByOwner.set(sub.ownerBackendNodeId, sub);
+  // Index frames by (parentTargetId, ownerBackendNodeId). backendNodeIds
+  // are scoped to the session whose process owns them, so we cannot use a
+  // flat global map — the same numeric id could appear in two different
+  // sessions and refer to different elements.
+  const frameByOwnerInSession = new Map<string, Map<number, FrameSubtree>>();
+  const sessionKey = (parentTargetId: string | undefined): string =>
+    parentTargetId ?? "<tab>";
+  for (const sub of frameTrees) {
+    const key = sessionKey(sub.parentTargetId);
+    let m = frameByOwnerInSession.get(key);
+    if (!m) {
+      m = new Map();
+      frameByOwnerInSession.set(key, m);
+    }
+    m.set(sub.ownerBackendNodeId, sub);
+  }
 
   const uidMap = new Map<string, UidEntry>();
   const lines: string[] = [];
@@ -197,13 +220,16 @@ export async function captureA11ySnapshot(
 
       // If this node is the owning iframe of an OOPIF, dive into the
       // frame's tree at the next depth instead of recursing into the
-      // (empty) iframe children in the parent document.
+      // (empty) iframe children in the parent document. Look up the
+      // mapping in the CURRENT session's bucket — the tab session for
+      // the top walk, or the current frame's session for nested walks.
+      const owners = frameByOwnerInSession.get(sessionKey(targetId));
       if (
-        !targetId &&
+        owners &&
         node.backendDOMNodeId !== undefined &&
-        frameByOwner.has(node.backendDOMNodeId)
+        owners.has(node.backendDOMNodeId)
       ) {
-        const sub = frameByOwner.get(node.backendDOMNodeId)!;
+        const sub = owners.get(node.backendDOMNodeId)!;
         walkTree(sub.nodes, childrenDepth, sub.targetId);
         return;
       }

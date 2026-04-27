@@ -54,6 +54,8 @@ export interface PendingDialog {
 export interface FrameTargetInfo {
   targetId: string;
   url: string;
+  /** undefined = parent is the tab session; otherwise the parent OOPIF target id. */
+  parentTargetId?: string;
 }
 
 export class DebuggerManager {
@@ -66,6 +68,11 @@ export class DebuggerManager {
   // We attach a debuggee per frame target so a11y/DOM/Runtime calls can reach
   // content inside those frames. Key is tabId → map of frame targetId → info.
   private frameTargets = new Map<number, Map<string, FrameTargetInfo>>();
+  // Reverse lookup: which tab does a frame target belong to. Required because
+  // chrome.debugger.onEvent fires for ALL attached sessions — including frame
+  // sessions whose source has only `targetId`, not `tabId`. Without this map
+  // we'd silently drop nested-OOPIF Target.attachedToTarget events.
+  private frameTargetToTab = new Map<string, number>();
 
   constructor() {
     chrome.tabs.onRemoved.addListener((tabId) => { void this.detach(tabId); });
@@ -79,6 +86,7 @@ export class DebuggerManager {
         const frames = this.frameTargets.get(source.tabId);
         if (frames) {
           for (const id of frames.keys()) {
+            this.frameTargetToTab.delete(id);
             void chrome.debugger.detach({ targetId: id }).catch(() => {});
           }
           this.frameTargets.delete(source.tabId);
@@ -86,8 +94,10 @@ export class DebuggerManager {
         // Keep console/network buffers — user may still want to read history post-detach; next attach resets them.
       } else if (source.targetId !== undefined) {
         // An iframe target went away (navigation, detach). Scrub it from every tab's set.
+        const targetId = source.targetId;
+        this.frameTargetToTab.delete(targetId);
         for (const frames of this.frameTargets.values()) {
-          frames.delete(source.targetId);
+          frames.delete(targetId);
         }
       }
     });
@@ -120,6 +130,7 @@ export class DebuggerManager {
     const frames = this.frameTargets.get(tabId);
     if (frames) {
       for (const id of frames.keys()) {
+        this.frameTargetToTab.delete(id);
         await chrome.debugger.detach({ targetId: id }).catch(() => {});
       }
       this.frameTargets.delete(tabId);
@@ -161,8 +172,19 @@ export class DebuggerManager {
    * We attach a chrome.debugger API handle for the new target and enable
    * the domains we need (DOM/Runtime/Accessibility) so snapshot + click
    * handlers can reach into the frame.
+   *
+   * `parentTargetId` is the session that fired the event — the tab session
+   * (undefined) for top-level iframes, or another OOPIF target id for
+   * grandchildren. We need this for nested OOPIFs because DOM.getFrameOwner
+   * only resolves a frame's owner element on the SESSION whose process
+   * actually contains that owner — i.e. the parent frame's session.
    */
-  private attachFrameTarget(tabId: number, targetId: string, url: string): void {
+  private attachFrameTarget(
+    tabId: number,
+    targetId: string,
+    url: string,
+    parentTargetId?: string,
+  ): void {
     let tabFrames = this.frameTargets.get(tabId);
     if (!tabFrames) {
       tabFrames = new Map();
@@ -177,11 +199,29 @@ export class DebuggerManager {
     const work = (async () => {
       try {
         await chrome.debugger.attach({ targetId }, "1.3");
+        // Register the mapping BEFORE enabling domains/auto-attach. CDP
+        // delivers Target.attachedToTarget events for existing grandchild
+        // frames synchronously during setAutoAttach — if frameTargetToTab
+        // doesn't have us yet, those events lose their tabId mapping in
+        // onEvent and get silently dropped.
+        tabFrames!.set(targetId, { targetId, url, parentTargetId });
+        this.frameTargetToTab.set(targetId, tabId);
         await chrome.debugger.sendCommand({ targetId }, "DOM.enable");
         await chrome.debugger.sendCommand({ targetId }, "Runtime.enable");
         await chrome.debugger.sendCommand({ targetId }, "Accessibility.enable");
-        tabFrames!.set(targetId, { targetId, url });
+        // Recursive auto-attach: subscribe this frame's session to its OWN
+        // child-target lifecycle so nested OOPIFs (Office365 pattern: shell →
+        // app frame → addin frame) emit Target.attachedToTarget upward to us.
+        await chrome.debugger
+          .sendCommand({ targetId }, "Target.setAutoAttach", {
+            autoAttach: true,
+            waitForDebuggerOnStart: false,
+            flatten: false,
+          })
+          .catch(() => {});
       } catch {
+        tabFrames!.delete(targetId);
+        this.frameTargetToTab.delete(targetId);
         await chrome.debugger.detach({ targetId }).catch(() => {});
       }
     })();
@@ -192,6 +232,7 @@ export class DebuggerManager {
   private forgetFrameTarget(tabId: number, targetId: string): void {
     const tabFrames = this.frameTargets.get(tabId);
     if (tabFrames?.delete(targetId)) {
+      this.frameTargetToTab.delete(targetId);
       void chrome.debugger.detach({ targetId }).catch(() => {});
     }
   }
@@ -254,7 +295,13 @@ export class DebuggerManager {
 
   /** Exposed for tests. */
   onEvent(src: chrome.debugger.Debuggee, method: string, params: Record<string, unknown>): void {
-    const tabId = src.tabId;
+    // Events arrive on whichever session emitted them. For the tab session
+    // src.tabId is set; for an OOPIF frame session src.targetId is set. Map
+    // frame-session events back to the owning tab so nested-OOPIF lifecycle
+    // events (Target.attachedToTarget for grandchildren) reach us.
+    const tabId =
+      src.tabId ??
+      (src.targetId !== undefined ? this.frameTargetToTab.get(src.targetId) : undefined);
     if (tabId === undefined) return;
     const consoleBuf = this.consoles.get(tabId);
     const netBuf = this.networks.get(tabId);
@@ -262,7 +309,12 @@ export class DebuggerManager {
     if (method === "Target.attachedToTarget") {
       const info = (params.targetInfo as { targetId?: string; type?: string; url?: string } | undefined) ?? {};
       if (info.type === "iframe" && info.targetId) {
-        this.attachFrameTarget(tabId, info.targetId, info.url ?? "");
+        // Parent of the new frame is whichever session fired this event:
+        // tab (src.tabId) → undefined parent; OOPIF (src.targetId) → that
+        // target id. The snapshot path needs this to call DOM.getFrameOwner
+        // against the right session.
+        const parentTargetId = src.tabId !== undefined ? undefined : src.targetId;
+        this.attachFrameTarget(tabId, info.targetId, info.url ?? "", parentTargetId);
       }
       return;
     }
