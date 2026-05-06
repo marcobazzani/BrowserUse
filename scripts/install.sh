@@ -142,6 +142,43 @@ EOF
   fi
 fi
 
+# --- Register with GitHub Copilot CLI ---------------------------------------
+GH_CFG="${HOME}/.copilot/mcp-config.json"
+COPILOT_STATUS="skip"
+if command -v copilot >/dev/null 2>&1; then
+  if command -v jq >/dev/null 2>&1; then
+    _note "Registering MCP server with GitHub Copilot CLI..."
+    mkdir -p "$(dirname "$GH_CFG")"
+    if [ -f "$GH_CFG" ]; then
+      TMP_CFG="$(mktemp)"
+      jq --arg n "node" --arg e "$ENTRY" \
+        '.servers.browseruse = {"type":"stdio","command":$n,"args":[$e]}' \
+        "$GH_CFG" > "$TMP_CFG" && mv "$TMP_CFG" "$GH_CFG"
+    else
+      jq -n --arg n "node" --arg e "$ENTRY" \
+        '{"servers":{"browseruse":{"type":"stdio","command":$n,"args":[$e]}}}' \
+        > "$GH_CFG"
+    fi
+    COPILOT_STATUS="registered"
+  else
+    _warn "'jq' not found — cannot auto-update Copilot config. Add manually to ${GH_CFG}:"
+    cat <<EOF
+
+{
+  "servers": {
+    "browseruse": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${ENTRY}"]
+    }
+  }
+}
+
+EOF
+    COPILOT_STATUS="manual"
+  fi
+fi
+
 # --- Final instructions ------------------------------------------------------
 cat <<EOF
 
@@ -159,7 +196,7 @@ cat <<EOF
   3. Click "Load unpacked" and select:
        ${EXT_DIR}
   4. Pin the BrowserUse toolbar icon (puzzle-piece menu → pin)
-  5. Start Claude Code or OpenCode and try:
+  5. Start Claude Code, OpenCode, or GitHub Copilot CLI and try:
        "open https://example.com in a new tab and tell me the title"
 
   Pairing is automatic — the extension and MCP server derive a matching
@@ -175,4 +212,7 @@ if [ "$CLAUDE_STATUS" = "manual" ]; then
 fi
 if [ "$OPENCODE_STATUS" = "manual" ]; then
   _warn "You still need to add the MCP server entry to ${OC_CFG} (see above)."
+fi
+if [ "$COPILOT_STATUS" = "manual" ]; then
+  _warn "You still need to add the MCP server entry to ${GH_CFG} (see above)."
 fi
