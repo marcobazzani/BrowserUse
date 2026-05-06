@@ -105,7 +105,30 @@ export class DebuggerManager {
 
   async attach(tabId: number): Promise<void> {
     if (this.attached.has(tabId)) return;
-    await chrome.debugger.attach({ tabId }, "1.3");
+    try {
+      await chrome.debugger.attach({ tabId }, "1.3");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Chrome refuses chrome.debugger.attach({tabId}) when the tab contains
+      // a chrome-extension:// iframe from a different extension (1Password,
+      // password managers, etc.). This is a hard Chrome restriction with no
+      // client-side workaround — surface a helpful error instead of the
+      // opaque internal one.
+      if (/chrome-extension:\/\/.*different extension/i.test(msg)) {
+        throw new Error(
+          "BrowserUse can't attach to this tab because another Chrome " +
+          "extension has injected a chrome-extension:// iframe — Chrome " +
+          "refuses debugger attach in that case. Most common culprits, in " +
+          "order: (1) Anthropic's \"Claude in Chrome\" / Claude Code " +
+          "extension (also drives Chrome via debugger and conflicts with " +
+          "BrowserUse on every page); (2) password managers (1Password, " +
+          "Bitwarden, LastPass) on login forms; (3) shopping helpers (Honey, " +
+          "Capital One Shopping). Disable the offending extension globally " +
+          "or per-site, or use an Incognito window without extensions."
+        );
+      }
+      throw e;
+    }
     await chrome.debugger.sendCommand({ tabId }, "Runtime.enable");
     await chrome.debugger.sendCommand({ tabId }, "Network.enable");
     await chrome.debugger.sendCommand({ tabId }, "Page.enable");
@@ -309,12 +332,23 @@ export class DebuggerManager {
     if (method === "Target.attachedToTarget") {
       const info = (params.targetInfo as { targetId?: string; type?: string; url?: string } | undefined) ?? {};
       if (info.type === "iframe" && info.targetId) {
+        // Skip iframes from other extensions (1Password popups, password
+        // managers, etc.). chrome.debugger.attach({targetId}) on a
+        // chrome-extension:// frame of another extension TAINTS the entire
+        // chrome.debugger session — subsequent operations on the parent tab
+        // fail with "Cannot access a chrome-extension:// URL of different
+        // extension". Note this only mitigates frame attaches; if Chrome's
+        // own attach({tabId}) check rejects the tab because some other
+        // extension already has a chrome-extension iframe injected, no
+        // client-side workaround can recover.
+        const url = info.url ?? "";
+        if (url.startsWith("chrome-extension://")) return;
         // Parent of the new frame is whichever session fired this event:
         // tab (src.tabId) → undefined parent; OOPIF (src.targetId) → that
         // target id. The snapshot path needs this to call DOM.getFrameOwner
         // against the right session.
         const parentTargetId = src.tabId !== undefined ? undefined : src.targetId;
-        this.attachFrameTarget(tabId, info.targetId, info.url ?? "", parentTargetId);
+        this.attachFrameTarget(tabId, info.targetId, url, parentTargetId);
       }
       return;
     }
