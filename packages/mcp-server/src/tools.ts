@@ -204,7 +204,7 @@ export function buildTools(bridge: BridgeServer) {
 
   const page_type: Tool<z.infer<ReturnType<typeof withProfile<typeof PageTypeParamsSchema>>>> = {
     description:
-      "Type text into an input/textarea by uid (from a snapshot) or CSS selector. Clears the field first by default. Set submit=true to submit the enclosing form. Set includeSnapshot=true to get an updated accessibility tree in the response.",
+      "Type text into an input/textarea by uid (from a snapshot) or CSS selector. Clears the field first by default. Set submit=true to submit the enclosing form. Set includeSnapshot=true to get an updated accessibility tree in the response. Embedded \\t becomes a Tab key and \\n becomes an Enter key, so a whole grid row or multi-line form can be entered in a single call (e.g. text=\"Name\\tAge\\nAlice\\t30\" types four cells with one round-trip — much faster than calling page_type once per cell).",
     inputSchema: withProfile(PageTypeParamsSchema),
     handler: async (params) => {
       guard(bridge);

@@ -117,6 +117,36 @@ describeE2E("page_type: real keystrokes reach the page (not Input.insertText)", 
     await new Promise<void>((r) => server?.close(() => r()));
   });
 
+  it("expands embedded \\t to Tab and \\n to Enter so one call enters a whole grid row", async () => {
+    const page = await ctx.newPage();
+    await page.goto(`${origin}/`);
+    await page.locator("#t").waitFor({ state: "attached", timeout: 5_000 });
+
+    const tabId = await sw.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return tabs[0]!.id!;
+    });
+
+    const snap = await mcpClient.callTool({
+      name: "page_snapshot",
+      arguments: { tabId, mode: "a11y" },
+    });
+    const parsed = JSON.parse(snap.content[0]!.text as string) as { content: string };
+    const m = parsed.content.match(/\[(e\d+)\][^\n]*textbox/);
+    expect(m, `textarea uid not found in:\n${parsed.content}`).toBeTruthy();
+    const uid = m![1]!;
+
+    await mcpClient.callTool({
+      name: "page_type",
+      arguments: { tabId, uid, text: "a\tb\nc" },
+    });
+
+    const keys = await page.evaluate(() =>
+      (window as unknown as { __keys: Array<{ key: string }> }).__keys.map((k) => k.key),
+    );
+    expect(keys).toEqual(["a", "Tab", "b", "Enter", "c"]);
+  }, 30_000);
+
   it("dispatches a keydown event per character of the input text", async () => {
     const page = await ctx.newPage();
     await page.goto(`${origin}/`);

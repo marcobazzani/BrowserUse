@@ -255,6 +255,29 @@ describe("handlers", () => {
     expect(insertCalls.length).toBe(0);
   });
 
+  // \t → Tab key, \n → Enter key. Lets a single page.type call enter a
+  // whole grid row or multi-line form (Excel for the Web, Google Sheets,
+  // chat composers) without per-cell round-trips through the bridge.
+  it("page.type expands \\t to Tab and \\n to Enter as real keys", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 82, method: "page.type",
+      params: { tabId: 1, uid: uids[1], text: "a\tb\nc" },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const downs = state.debuggerState.commands
+      .filter((c: any) => c.method === "Input.dispatchKeyEvent" && c.params.type === "keyDown")
+      .map((c: any) => ({ key: c.params.key, code: c.params.code }));
+    expect(downs).toEqual([
+      { key: "a",     code: "KeyA"  },
+      { key: "Tab",   code: "Tab"   },
+      { key: "b",     code: "KeyB"  },
+      { key: "Enter", code: "Enter" },
+      { key: "c",     code: "KeyC"  },
+    ]);
+  });
+
   // --- page.hover ---
   it("page.hover dispatches mouseMoved event", async () => {
     const uids = await snapshotUids(1);
