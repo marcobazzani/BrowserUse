@@ -22,9 +22,11 @@ const fakeBridge = () => {
         if (method === "tabs.activate")   return { ok: true };
         if (method === "session.release") return { ok: true };
         if (method === "page.click")      return { ok: true };
+        if (method === "page.clickXy")    return { ok: true };
         if (method === "page.type")       return { ok: true };
         if (method === "page.scroll")     return { ok: true };
         if (method === "page.hover")      return { ok: true };
+        if (method === "page.focus")      return { ok: true, focused: true, modeUsed: (params as any)?.mode === "auto" || !(params as any)?.mode ? "js" : (params as any).mode };
         if (method === "page.pressKey")   return { ok: true };
         if (method === "page.fillForm")   return { ok: true, filledCount: 2 };
         if (method === "page.handleDialog") return { ok: true, handled: true, dialogType: "alert", dialogMessage: "hi" };
@@ -93,13 +95,23 @@ describe("tool adapters", () => {
     expect(calls.map((c) => c.method)).toEqual(["session.claim", "page.snapshot"]);
   });
 
-  it("page_screenshot returns base64 payload in a text content block", async () => {
+  it("page_screenshot returns MCP image content so multimodal models see the pixels", async () => {
     const { bridge } = fakeBridge();
     const tools = buildTools(bridge);
     const result = await tools.page_screenshot.handler({ tabId: 5 });
-    const parsed = JSON.parse((result.content[0] as any).text);
-    expect(parsed.format).toBe("png");
-    expect(typeof parsed.base64).toBe("string");
+    // First item: image. The model receives this as a renderable image.
+    const img = result.content.find((c: any) => c.type === "image") as any;
+    expect(img).toBeDefined();
+    expect(img.mimeType).toBe("image/png");
+    expect(typeof img.data).toBe("string");
+    expect(img.data.length).toBeGreaterThan(0);
+    // Companion text item carries lightweight metadata, not the bytes.
+    const meta = result.content.find((c: any) => c.type === "text") as any;
+    const parsedMeta = JSON.parse(meta.text);
+    expect(parsedMeta.format).toBe("png");
+    expect(typeof parsedMeta.byteLength).toBe("number");
+    // Critically: base64 is NOT in the text item — it lives in the image item.
+    expect(parsedMeta.base64).toBeUndefined();
   });
 
   it("page_navigate does not re-claim an already-claimed tab", async () => {
@@ -334,6 +346,61 @@ describe("tool adapters", () => {
   });
 });
 
+describe("page_click_xy tool wrapper", () => {
+  it("auto-claims and forwards x/y/button to page.clickXy", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_click_xy.handler({ tabId: 5, x: 45, y: 107, button: "left" });
+    expect(calls.map((c) => c.method)).toEqual(["session.claim", "page.clickXy"]);
+    const xy = calls.find((c) => c.method === "page.clickXy")!;
+    expect(xy.params).toMatchObject({ tabId: 5, x: 45, y: 107, button: "left" });
+  });
+
+  it("page_click_xy is in BATCHABLE_TOOLS so it composes inside page_batch", async () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    const r = await tools.page_batch.handler({
+      steps: [
+        { tool: "page_screenshot", args: { tabId: 1 } },
+        { tool: "page_click_xy",   args: { tabId: 1, x: 45, y: 107 } },
+      ],
+    });
+    const parsed = JSON.parse((r.content[0] as any).text);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.results.map((s: any) => s.tool)).toEqual(["page_screenshot", "page_click_xy"]);
+  });
+});
+
+describe("page_focus tool wrapper", () => {
+  it("auto-claims and forwards mode + uid", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    const r = await tools.page_focus.handler({ tabId: 9, uid: "e42", mode: "blur+click" });
+    const parsed = JSON.parse((r.content[0] as any).text);
+    expect(parsed.focused).toBe(true);
+    expect(parsed.modeUsed).toBe("blur+click");
+    expect(calls.map((c) => c.method)).toEqual(["session.claim", "page.focus"]);
+    const focusCall = calls.find((c) => c.method === "page.focus")!;
+    expect((focusCall.params as any).uid).toBe("e42");
+    expect((focusCall.params as any).mode).toBe("blur+click");
+  });
+
+  it("page_focus is in BATCHABLE_TOOLS so it composes inside page_batch", async () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    const r = await tools.page_batch.handler({
+      steps: [
+        { tool: "page_focus", args: { tabId: 1, uid: "e9", mode: "blur+click" } },
+        { tool: "page_type",  args: { tabId: 1, uid: "e9", text: "hi", clear: false } },
+      ],
+    });
+    const parsed = JSON.parse((r.content[0] as any).text);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.results.map((s: any) => s.tool)).toEqual(["page_focus", "page_type"]);
+    expect(parsed.results.every((s: any) => s.ok)).toBe(true);
+  });
+});
+
 describe("PageBatchParamsSchema", () => {
   it("round-trips a 3-step batch with default stopOnError=true", () => {
     const parsed = PageBatchParamsSchema.parse({
@@ -462,9 +529,13 @@ describe("page_batch handler", () => {
     expect(profiles).toEqual(new Set(["work"]));
   });
 
-  it("truncates oversized base64 fields in step results to keep MCP under the cap", async () => {
+  // page_screenshot inside a batch: the image content item is elided with a
+  // sentinel so the batch's structured result stays small. Metadata (format,
+  // byteLength) survives so the model can decide whether to call
+  // page_screenshot directly to view the image.
+  it("elides screenshot image content inside page_batch results (keeps batch small)", async () => {
     const { bridge } = fakeBridge();
-    const big = "A".repeat(50_000); // 50KB base64 — over the 30KB threshold.
+    const big = "A".repeat(50_000);
     bridge.call = vi.fn(async (method: string) => {
       if (method === "session.claim") return { ok: true, groupId: 1 };
       if (method === "page.screenshot") return { format: "jpeg", base64: big };
@@ -480,30 +551,31 @@ describe("page_batch handler", () => {
     });
     const parsed = JSON.parse((r.content[0] as any).text) as {
       ok: boolean;
-      results: Array<{ tool: string; ok: boolean; result?: { base64?: string; format?: string } }>;
+      results: Array<{ tool: string; ok: boolean; result?: { format?: string; byteLength?: number; image?: string } }>;
     };
     expect(parsed.ok).toBe(true);
     const shot = parsed.results[1]!.result!;
-    expect(shot.format).toBe("jpeg");                 // metadata preserved
-    expect(shot.base64!.length).toBeLessThan(200);     // payload replaced with sentinel
-    expect(shot.base64).toMatch(/truncated/i);         // sentinel mentions truncation
-    expect(shot.base64).toMatch(/50000/);              // sentinel reports original size
+    expect(shot.format).toBe("jpeg");
+    expect(shot.byteLength).toBe(50_000);
+    expect(shot.image).toMatch(/elided/i);
+    expect(shot.image).toMatch(/image\/jpeg/);
+    // The full base64 is NOT in the batch result.
+    const fullText = JSON.stringify(parsed);
+    expect(fullText.length).toBeLessThan(2_000);
   });
 
-  it("leaves small base64 fields intact (under threshold)", async () => {
+  // Direct page_screenshot (outside a batch) returns full image content for the model to view.
+  it("page_screenshot called directly returns full image content (not elided)", async () => {
     const { bridge } = fakeBridge();
     bridge.call = vi.fn(async (method: string) => {
       if (method === "session.claim") return { ok: true, groupId: 1 };
-      if (method === "page.screenshot") return { format: "jpeg", base64: "AAAA" };
+      if (method === "page.screenshot") return { format: "jpeg", base64: "/9j/RealImage" };
       throw new Error("unexpected " + method);
     });
     const tools = buildTools(bridge);
-    const r = await tools.page_batch.handler({
-      steps: [{ tool: "page_screenshot", args: { tabId: 1 } }],
-    });
-    const parsed = JSON.parse((r.content[0] as any).text) as {
-      results: Array<{ result?: { base64?: string } }>;
-    };
-    expect(parsed.results[0]!.result!.base64).toBe("AAAA");
+    const r = await tools.page_screenshot.handler({ tabId: 1 });
+    const img = r.content.find((c: any) => c.type === "image") as any;
+    expect(img.data).toBe("/9j/RealImage");
+    expect(img.mimeType).toBe("image/jpeg");
   });
 });

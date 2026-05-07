@@ -210,6 +210,72 @@ export const PageHoverResultSchema = z.object({
   snapshot: z.string().optional(),
 }).strict();
 
+/* ---------- Coordinate-click (vision-driven escape hatch) ---------- */
+
+/**
+ * Click at absolute viewport coordinates. The escape hatch for virtual-canvas
+ * widgets where uid-based clicks don't resolve to specific cells (Excel grid,
+ * Sheets, Figma, any custom-rendered surface). Workflow: page_screenshot →
+ * model identifies (x, y) from the rendered image → page_click_xy.
+ *
+ * Coordinates are in the active viewport's device-independent pixels.
+ */
+export const PageClickXyParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    x: z.number().min(0),
+    y: z.number().min(0),
+    button: z.enum(["left", "right", "middle"]).default("left"),
+    includeSnapshot: z.boolean().default(false),
+  })
+  .strict();
+export const PageClickXyResultSchema = z.object({
+  ok: z.literal(true),
+  snapshot: z.string().optional(),
+}).strict();
+
+/* ---------- Focus (loud, verifying) ---------- */
+
+/**
+ * Make a target element the active element, with verification. Useful when
+ * an SPA's input pipeline ignores plain JS focus() (Excel for the Web grid,
+ * Sheets, Figma) — the model can escalate explicitly via mode, and gets back
+ * an honest report of the actual activeElement when the focus didn't take.
+ *
+ * Mode semantics:
+ *  - auto:        try JS focus → verify → escalate to coordinate-click on mismatch.
+ *  - js:          JS focus only (the historical behaviour). No escalation.
+ *  - click:       coordinate-click only. No prior JS focus().
+ *  - blur+click:  drop sticky focus first via document.activeElement.blur(),
+ *                 then coordinate-click. Strongest dislodge for apps that pin focus.
+ */
+export const PageFocusParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    uid: z.string().min(1).optional(),
+    selector: z.string().min(1).optional(),
+    mode: z.enum(["auto", "js", "click", "blur+click"]).default("auto"),
+    includeSnapshot: z.boolean().default(false),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (!v.uid && !v.selector) {
+      ctx.addIssue({ code: "custom", message: "provide either uid or selector" });
+    }
+  });
+export const PageFocusResultSchema = z.object({
+  ok: z.literal(true),
+  /** True when document.activeElement === target after the focus dance. */
+  focused: z.boolean(),
+  /** Mode that ultimately resulted in the reported state. */
+  modeUsed: z.enum(["js", "click", "blur+click"]),
+  /** When focused=false, what activeElement actually is (for the model to diagnose). */
+  actualTag: z.string().optional(),
+  actualRole: z.string().nullable().optional(),
+  actualName: z.string().optional(),
+  snapshot: z.string().optional(),
+}).strict();
+
 /* ---------- Press key ---------- */
 
 export const PagePressKeyParamsSchema = z
@@ -441,6 +507,8 @@ export const METHODS = {
   "page.type":       { params: PageTypeParamsSchema,       result: PageTypeResultSchema },
   "page.scroll":     { params: PageScrollParamsSchema,     result: PageScrollResultSchema },
   "page.hover":      { params: PageHoverParamsSchema,      result: PageHoverResultSchema },
+  "page.focus":      { params: PageFocusParamsSchema,      result: PageFocusResultSchema },
+  "page.clickXy":    { params: PageClickXyParamsSchema,    result: PageClickXyResultSchema },
   "page.pressKey":   { params: PagePressKeyParamsSchema,   result: PagePressKeyResultSchema },
   "page.fillForm":   { params: PageFillFormParamsSchema,   result: PageFillFormResultSchema },
   "page.handleDialog": { params: PageHandleDialogParamsSchema, result: PageHandleDialogResultSchema },

@@ -11,6 +11,8 @@ import {
   PageSelectParamsSchema,
   PageUploadFileParamsSchema,
   PageDragParamsSchema,
+  PageFocusParamsSchema,
+  PageClickXyParamsSchema,
 } from "@browseruse/shared";
 import { resolveUid } from "../lib/snapshot-manager.js";
 import { takeA11ySnapshot } from "./page-read.js";
@@ -161,6 +163,104 @@ async function coordinateClick(
   }, targetId);
 }
 
+/* ---------- Focus verification + escalation ---------- */
+
+interface FocusActualState {
+  matches: boolean;
+  actualTag?: string;
+  actualRole?: string | null;
+  actualName?: string;
+}
+
+/**
+ * Ask the page whether `el` is its document's activeElement. When it isn't,
+ * report what activeElement actually is — so the caller can either escalate
+ * (coordinate-click, blur+click) or surface a structured error to the model.
+ *
+ * Runs in the element's own document via the same CDP session we used to
+ * resolve it, which is critical for OOPIFs (Excel for the Web's grid lives
+ * inside an Office iframe).
+ */
+async function verifyFocus(
+  mgr: DebuggerManager,
+  tabId: number,
+  el: ResolvedElement,
+): Promise<FocusActualState> {
+  const r = await mgr.sendCommand<{ result: { value: FocusActualState } }>(
+    tabId,
+    "Runtime.callFunctionOn",
+    {
+      objectId: el.objectId,
+      functionDeclaration: `function() {
+        var doc = this.ownerDocument;
+        var active = doc && doc.activeElement;
+        if (active === this) return { matches: true };
+        return {
+          matches: false,
+          actualTag: active && active.tagName ? active.tagName.toLowerCase() : 'body',
+          actualRole: active && active.getAttribute ? active.getAttribute('role') : null,
+          actualName: active ? (
+            (active.getAttribute && (active.getAttribute('aria-label') || active.getAttribute('placeholder') || active.getAttribute('name'))) ||
+            (active.textContent || '').trim().slice(0, 80)
+          ) : ''
+        };
+      }`,
+      returnByValue: true,
+    },
+    el.targetId,
+  );
+  return r.result.value;
+}
+
+/** Plain JS focus(), idempotent: skips when the element is already active. */
+async function jsFocus(mgr: DebuggerManager, tabId: number, el: ResolvedElement): Promise<void> {
+  await mgr.sendCommand(tabId, "Runtime.callFunctionOn", {
+    objectId: el.objectId,
+    functionDeclaration: `function() { if (this.ownerDocument && this !== this.ownerDocument.activeElement) this.focus(); }`,
+    returnByValue: true,
+  }, el.targetId);
+}
+
+/** document.activeElement.blur() inside the element's own document — drops sticky focus. */
+async function blurActive(mgr: DebuggerManager, tabId: number, el: ResolvedElement): Promise<void> {
+  await mgr.sendCommand(tabId, "Runtime.callFunctionOn", {
+    objectId: el.objectId,
+    functionDeclaration: `function() {
+      var doc = this.ownerDocument;
+      var a = doc && doc.activeElement;
+      if (a && a !== this && typeof a.blur === 'function') a.blur();
+    }`,
+    returnByValue: true,
+  }, el.targetId);
+}
+
+interface FocusOutcome {
+  focused: boolean;
+  modeUsed: "js" | "click" | "blur+click";
+  actual?: FocusActualState;
+}
+
+/**
+ * Auto mode: try the gentle JS focus, verify, escalate to coordinate-click on
+ * mismatch, verify again. Returns the outcome — never throws on focus
+ * mismatch; callers decide whether mismatch is fatal (page.type makes it so;
+ * page.focus reports it back to the model).
+ */
+async function focusAuto(
+  mgr: DebuggerManager,
+  tabId: number,
+  el: ResolvedElement,
+): Promise<FocusOutcome> {
+  await jsFocus(mgr, tabId, el);
+  let v = await verifyFocus(mgr, tabId, el);
+  if (v.matches) return { focused: true, modeUsed: "js" };
+  // Escalate: real coordinate click. Reaches the OS-level focus router and
+  // dislodges most apps' internal focus management.
+  await coordinateClick(mgr, tabId, el.objectId, el.targetId);
+  v = await verifyFocus(mgr, tabId, el);
+  return { focused: v.matches, modeUsed: "click", actual: v.matches ? undefined : v };
+}
+
 // In-page scroll function (self-contained, no closures).
 function inPageScroll(
   dx: number | undefined,
@@ -295,6 +395,26 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     return { ok: true as const, snapshot };
   });
 
+  // page.clickXy: dispatch a click at absolute viewport coords. The model
+  // discovers coords visually from a screenshot — the escape hatch for
+  // virtual-canvas widgets where uid bbox centers don't map to anything
+  // meaningful (Excel grid cells, Sheets, Figma). No element resolution,
+  // no targetId — coordinates are top-frame-viewport relative, which
+  // matches the screenshot the model is reading from.
+  d.register("page.clickXy", async (raw) => {
+    const p = PageClickXyParamsSchema.parse(raw);
+    const btn = p.button === "right" ? 2 : p.button === "middle" ? 1 : 0;
+    const btnName = p.button === "right" ? "right" : p.button === "middle" ? "middle" : "left";
+    await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x: p.x, y: p.y, button: btnName, buttons: 1 << btn, clickCount: 1,
+    });
+    await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x: p.x, y: p.y, button: btnName, buttons: 0, clickCount: 1,
+    });
+    const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
+    return { ok: true as const, snapshot };
+  });
+
   d.register("page.type", async (raw) => {
     const p = PageTypeParamsSchema.parse(raw);
     let el;
@@ -304,16 +424,16 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
       throw translateCdpError(e);
     }
 
-    // Primary path: focus+clear via JS. Falls through to coordinate-click when
-    // the element sits inside another extension's iframe (1Password autofill,
-    // anti-phishing overlays) and Chrome refuses JS access.
+    // Self-verifying focus: JS focus → verify → escalate to coordinate-click
+    // on mismatch → verify again. If both attempts fail we throw a structured
+    // error including what activeElement actually became, so the caller can
+    // route to page.focus or app-specific anchors instead of typing into
+    // the void. Cross-extension iframes (1Password etc.) keep their own
+    // coordinate-click fallback path because Chrome refuses JS access there.
     let usedFallback = false;
+    let outcome: FocusOutcome;
     try {
-      await mgr.sendCommand(p.tabId, "Runtime.callFunctionOn", {
-        objectId: el.objectId,
-        functionDeclaration: `function() { this.focus(); }`,
-        returnByValue: true,
-      }, el.targetId);
+      outcome = await focusAuto(mgr, p.tabId, el);
     } catch (e) {
       if (!isCrossExtensionError(e)) throw translateCdpError(e);
       usedFallback = true;
@@ -322,6 +442,15 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
       } catch (ce) {
         throw translateCdpError(ce);
       }
+      outcome = { focused: true, modeUsed: "click" };
+    }
+    if (!outcome.focused) {
+      const a = outcome.actual!;
+      throw new Error(
+        `page.type couldn't focus the target — activeElement is <${a.actualTag} role="${a.actualRole ?? ""}" name="${a.actualName ?? ""}">. ` +
+        `The page is grabbing focus elsewhere (common in Excel/Sheets/Figma). ` +
+        `Try page.focus(uid, mode: "blur+click") or use an app-specific anchor (Excel Name Box, Sheets Cmd+G).`,
+      );
     }
 
     if (p.clear && !usedFallback) {
@@ -384,6 +513,50 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     }, el.targetId);
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, snapshot };
+  });
+
+  d.register("page.focus", async (raw) => {
+    const p = PageFocusParamsSchema.parse(raw);
+    const el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
+
+    let modeUsed: "js" | "click" | "blur+click";
+    if (p.mode === "js") {
+      await jsFocus(mgr, p.tabId, el);
+      modeUsed = "js";
+    } else if (p.mode === "click") {
+      await coordinateClick(mgr, p.tabId, el.objectId, el.targetId);
+      modeUsed = "click";
+    } else if (p.mode === "blur+click") {
+      await blurActive(mgr, p.tabId, el);
+      await coordinateClick(mgr, p.tabId, el.objectId, el.targetId);
+      modeUsed = "blur+click";
+    } else {
+      // auto: gentle then aggressive, mirroring page.type's path.
+      const out = await focusAuto(mgr, p.tabId, el);
+      const v = await verifyFocus(mgr, p.tabId, el);
+      const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
+      return {
+        ok: true as const,
+        focused: v.matches,
+        modeUsed: out.modeUsed,
+        actualTag: v.matches ? undefined : v.actualTag,
+        actualRole: v.matches ? undefined : v.actualRole,
+        actualName: v.matches ? undefined : v.actualName,
+        snapshot,
+      };
+    }
+
+    const v = await verifyFocus(mgr, p.tabId, el);
+    const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
+    return {
+      ok: true as const,
+      focused: v.matches,
+      modeUsed,
+      actualTag: v.matches ? undefined : v.actualTag,
+      actualRole: v.matches ? undefined : v.actualRole,
+      actualName: v.matches ? undefined : v.actualName,
+      snapshot,
+    };
   });
 
   d.register("page.pressKey", async (raw) => {

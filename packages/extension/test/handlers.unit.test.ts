@@ -84,6 +84,11 @@ function fakeChrome() {
           if (params?.functionDeclaration?.includes("page.select target") || params?.functionDeclaration?.includes("picked")) {
             return { result: { type: "object", value: ["opt1"] } };
           }
+          // verifyFocus: JS in the page returns { matches, actualTag?, ... }.
+          // Default to "focus took" so happy-path tests don't have to special-case it.
+          if (params?.functionDeclaration?.includes("doc.activeElement") || params?.functionDeclaration?.includes("matches: true")) {
+            return { result: { type: "object", value: { matches: true } } };
+          }
           return { result: { type: "undefined" } };
         }
         if (method === "Page.handleJavaScriptDialog") return {};
@@ -229,6 +234,35 @@ describe("handlers", () => {
     expect(resp.error).toBeDefined();
   });
 
+  // page.clickXy: vision-driven escape hatch. Dispatches at the supplied
+  // (x, y) without resolving any element — used after the model has read a
+  // screenshot and computed coordinates for a virtual-canvas widget cell.
+  it("page.clickXy fires mousePressed + mouseReleased at exact coordinates", async () => {
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 200, method: "page.clickXy",
+      params: { tabId: 1, x: 45, y: 107 },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const mouse = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchMouseEvent");
+    expect(mouse.length).toBe(2);
+    expect(mouse[0].params).toMatchObject({ type: "mousePressed", x: 45, y: 107, button: "left" });
+    expect(mouse[1].params).toMatchObject({ type: "mouseReleased", x: 45, y: 107, button: "left" });
+  });
+
+  it("page.clickXy honors button=right and never resolves a uid (no DOM lookup)", async () => {
+    state.debuggerState.commands = [];
+    await d.handle({
+      jsonrpc: "2.0", id: 201, method: "page.clickXy",
+      params: { tabId: 1, x: 200, y: 50, button: "right" },
+    });
+    const mouse = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchMouseEvent");
+    expect(mouse[0].params.button).toBe("right");
+    // Critical: no DOM.resolveNode / DOM.getBoxModel — clickXy bypasses element resolution.
+    const dom = state.debuggerState.commands.filter((c: any) => /^DOM\./.test(c.method));
+    expect(dom.length).toBe(0);
+  });
+
   // --- page.type (CDP-based) ---
   it("page.type with uid focuses and types each character as a real keystroke", async () => {
     const uids = await snapshotUids(1);
@@ -253,6 +287,105 @@ describe("handlers", () => {
     // No Input.insertText anymore.
     const insertCalls = state.debuggerState.commands.filter((c: any) => c.method === "Input.insertText");
     expect(insertCalls.length).toBe(0);
+  });
+
+  // page.type throws a structured, actionable error when focus verification
+  // fails after escalation — the model gets diagnostic info instead of
+  // silently typing into the wrong element. Excel/Sheets/Figma scenario.
+  it("page.type throws with diagnostic info when focus never takes", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    // Override the Runtime.callFunctionOn stub to report focus mismatch with
+    // a specific actualName, simulating Excel pinning focus on the Name Box.
+    const origSend = (globalThis as any).chrome.debugger.sendCommand;
+    (globalThis as any).chrome.debugger.sendCommand = vi.fn(async (t: any, method: string, params: any) => {
+      if (method === "Runtime.callFunctionOn" && params?.functionDeclaration?.includes("doc.activeElement")) {
+        return { result: { type: "object", value: { matches: false, actualTag: "input", actualRole: "combobox", actualName: "Casella Nome" } } };
+      }
+      return origSend(t, method, params);
+    });
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 84, method: "page.type",
+      params: { tabId: 1, uid: uids[1], text: "x", clear: false },
+    });
+    (globalThis as any).chrome.debugger.sendCommand = origSend;
+    expect(resp.error).toBeDefined();
+    expect(resp.error?.message).toMatch(/couldn't focus/i);
+    expect(resp.error?.message).toMatch(/Casella Nome/);
+    expect(resp.error?.message).toMatch(/blur\+click|Name Box|Cmd\+G/);
+  });
+
+  // page.focus reports the actual activeElement when focus didn't take —
+  // observable signal the model can act on without seeing a thrown error.
+  it("page.focus mode=js returns focused=false with actual fields when mismatch", async () => {
+    const uids = await snapshotUids(1);
+    const origSend = (globalThis as any).chrome.debugger.sendCommand;
+    (globalThis as any).chrome.debugger.sendCommand = vi.fn(async (t: any, method: string, params: any) => {
+      if (method === "Runtime.callFunctionOn" && params?.functionDeclaration?.includes("doc.activeElement")) {
+        return { result: { type: "object", value: { matches: false, actualTag: "div", actualRole: "grid", actualName: "Foglio1" } } };
+      }
+      return origSend(t, method, params);
+    });
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 85, method: "page.focus",
+      params: { tabId: 1, uid: uids[1], mode: "js" },
+    });
+    (globalThis as any).chrome.debugger.sendCommand = origSend;
+    expect((resp.result as any).ok).toBe(true);
+    expect((resp.result as any).focused).toBe(false);
+    expect((resp.result as any).modeUsed).toBe("js");
+    expect((resp.result as any).actualName).toBe("Foglio1");
+    expect((resp.result as any).actualRole).toBe("grid");
+  });
+
+  // page.focus mode=blur+click first blurs the active element then coordinate-clicks.
+  // Strongest dislodge for apps that sticky-pin focus.
+  it("page.focus mode=blur+click runs blur then dispatches a real click", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 86, method: "page.focus",
+      params: { tabId: 1, uid: uids[0], mode: "blur+click" },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    expect((resp.result as any).focused).toBe(true);
+    expect((resp.result as any).modeUsed).toBe("blur+click");
+    // The handler should have issued a blur() call (matches "blur") and a
+    // mouse press + release pair (the coordinate click).
+    const blurCalls = state.debuggerState.commands.filter(
+      (c: any) => c.method === "Runtime.callFunctionOn" &&
+        typeof c.params?.functionDeclaration === "string" &&
+        c.params.functionDeclaration.includes(".blur()"),
+    );
+    expect(blurCalls.length).toBeGreaterThan(0);
+    const mouseDowns = state.debuggerState.commands.filter(
+      (c: any) => c.method === "Input.dispatchMouseEvent" && c.params.type === "mousePressed",
+    );
+    expect(mouseDowns.length).toBe(1);
+  });
+
+  // Idempotent focus: page.type must not unconditionally re-focus the target.
+  // Excel for the Web treats every focus() on its grid textbox as a focus
+  // enter event that advances cell selection by one — consecutive page.type
+  // calls between Tab presses end up scattered across cells with gaps.
+  it("page.type uses idempotent focus (skips this.focus() when already active)", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    await d.handle({
+      jsonrpc: "2.0", id: 83, method: "page.type",
+      params: { tabId: 1, uid: uids[1], text: "x", clear: false },
+    });
+    const focusCalls = state.debuggerState.commands.filter(
+      (c: any) =>
+        c.method === "Runtime.callFunctionOn" &&
+        typeof c.params?.functionDeclaration === "string" &&
+        c.params.functionDeclaration.includes("this.focus()"),
+    );
+    expect(focusCalls.length).toBeGreaterThan(0);
+    // The focus snippet must guard with an activeElement check, not blindly call focus().
+    for (const f of focusCalls) {
+      expect(f.params.functionDeclaration).toMatch(/activeElement/);
+    }
   });
 
   // \t → Tab key, \n → Enter key. Lets a single page.type call enter a

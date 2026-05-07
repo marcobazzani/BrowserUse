@@ -11,6 +11,8 @@ import {
   PageTypeParamsSchema,
   PageScrollParamsSchema,
   PageHoverParamsSchema,
+  PageFocusParamsSchema,
+  PageClickXyParamsSchema,
   PagePressKeyParamsSchema,
   PageFillFormParamsSchema,
   PageHandleDialogParamsSchema,
@@ -26,7 +28,10 @@ import {
 } from "@browseruse/shared";
 import type { BridgeServer } from "./bridge.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+type ToolContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+type ToolResult = { content: ToolContent[] };
 interface Tool<P> {
   description: string;
   inputSchema: z.ZodTypeAny;
@@ -41,8 +46,8 @@ interface Tool<P> {
 export const BATCHABLE_TOOLS = [
   "tabs_list", "tabs_create", "tabs_close", "tabs_activate",
   "page_navigate", "page_snapshot", "page_screenshot",
-  "page_click", "page_type", "page_scroll",
-  "page_hover", "page_press_key", "page_fill_form",
+  "page_click", "page_click_xy", "page_type", "page_scroll",
+  "page_hover", "page_focus", "page_press_key", "page_fill_form",
   "page_handle_dialog", "page_select", "page_upload_file", "page_drag",
   "page_fetch", "page_eval_js",
   "console_read", "network_read",
@@ -209,14 +214,24 @@ export function buildTools(bridge: BridgeServer) {
 
   const page_screenshot: Tool<z.infer<ReturnType<typeof withProfile<typeof PageScreenshotParamsSchema>>>> = {
     description:
-      "Capture a screenshot of the visible area of a tab as a base64-encoded image. Prefer page_snapshot for understanding page structure.",
+      "Capture a screenshot of the visible area of a tab. Returns the rendered image as MCP image content — multimodal models see the pixels directly and can identify on-screen positions for page_click_xy. Prefer page_snapshot for understanding DOM structure; use page_screenshot when you need to read or click something visually (charts, virtual canvases, custom-rendered widgets).",
     inputSchema: withProfile(PageScreenshotParamsSchema),
     handler: async (params) => {
       guard(bridge);
       const { profile, params: p } = splitProfile(params as Record<string, unknown>);
       const parsed = PageScreenshotParamsSchema.parse(p);
       if (parsed.tabId !== undefined) await ensureClaim(parsed.tabId, profile);
-      return text(await bridge.call("page.screenshot", parsed, profile));
+      const r = await bridge.call("page.screenshot", parsed, profile) as { format: string; base64: string };
+      const mimeType = r.format === "png" ? "image/png" : "image/jpeg";
+      return {
+        content: [
+          { type: "image" as const, data: r.base64, mimeType },
+          // Companion text item: lets agents that ignore image content (e.g.
+          // when relayed through page_batch) still see the metadata. Excludes
+          // base64 — clients that need the bytes call page_screenshot directly.
+          { type: "text" as const, text: JSON.stringify({ format: r.format, byteLength: r.base64.length }) },
+        ],
+      };
     },
   };
 
@@ -263,6 +278,24 @@ export function buildTools(bridge: BridgeServer) {
     },
   };
 
+  const page_click_xy: Tool<z.infer<ReturnType<typeof withProfile<typeof PageClickXyParamsSchema>>>> = {
+    description:
+      "Click at absolute viewport coordinates (x, y). Vision-driven escape hatch for virtual-canvas widgets where uid bbox centers don't map to specific cells (Excel grid cells, Google Sheets, Figma, custom-rendered surfaces). " +
+      "Workflow: " +
+      "1) call page_screenshot — the response includes the rendered image, which the model can see directly. " +
+      "2) identify the target's pixel coordinates from the image (e.g., Excel cell A2 ≈ (45, 107)). " +
+      "3) call page_click_xy with those coordinates. " +
+      "Coordinates are in viewport pixels matching the screenshot. Prefer page_click(uid) for real DOM elements — it survives layout shifts and is robust. Use page_click_xy only when no uid corresponds to the target you can see.",
+    inputSchema: withProfile(PageClickXyParamsSchema),
+    handler: async (params) => {
+      guard(bridge);
+      const { profile, params: p } = splitProfile(params as Record<string, unknown>);
+      const parsed = PageClickXyParamsSchema.parse(p);
+      await ensureClaim(parsed.tabId, profile);
+      return text(await bridge.call("page.clickXy", parsed, profile));
+    },
+  };
+
   const page_type: Tool<z.infer<ReturnType<typeof withProfile<typeof PageTypeParamsSchema>>>> = {
     description:
       "Type text into an input/textarea by uid (from a snapshot) or CSS selector. Clears the field first by default. Set submit=true to submit the enclosing form. Set includeSnapshot=true to get an updated accessibility tree in the response. Embedded \\t becomes a Tab key and \\n becomes an Enter key, so a whole multi-line form can be entered in a single call (e.g. text=\"Name\\tAge\\nAlice\\t30\" types four cells with one round-trip). " +
@@ -300,6 +333,26 @@ export function buildTools(bridge: BridgeServer) {
       const parsed = PageHoverParamsSchema.parse(p);
       await ensureClaim(parsed.tabId, profile);
       return text(await bridge.call("page.hover", parsed, profile));
+    },
+  };
+
+  const page_focus: Tool<z.infer<ReturnType<typeof withProfile<typeof PageFocusParamsSchema>>>> = {
+    description:
+      "Make a target element the active element, with verification. Use this when an SPA grabs focus back (Excel for the Web, Google Sheets, Figma) and a previous page_type returned a 'couldn't focus' error reporting that document.activeElement is something else. " +
+      "Modes: " +
+      "auto (default) — JS focus → verify → escalate to coordinate-click on mismatch. Same dance page_type does internally; useful when you want to verify focus before a typing batch. " +
+      "js — JS focus only (gentle, doesn't dismiss popovers, doesn't activate buttons). " +
+      "click — coordinate-click only (dispatches a real OS-level click; reaches the app's input router). " +
+      "blur+click — drop sticky focus first via document.activeElement.blur(), then coordinate-click. Strongest dislodge. " +
+      "Result includes focused (boolean) and, on mismatch, actualTag/actualRole/actualName so the model can diagnose what's stealing focus. " +
+      "Note: virtual-canvas widgets (Excel grid cells, Figma frames) need app-specific selection (Name Box, Cmd+G) — page_focus alone can't move you to a specific cell.",
+    inputSchema: withProfile(PageFocusParamsSchema),
+    handler: async (params) => {
+      guard(bridge);
+      const { profile, params: p } = splitProfile(params as Record<string, unknown>);
+      const parsed = PageFocusParamsSchema.parse(p);
+      await ensureClaim(parsed.tabId, profile);
+      return text(await bridge.call("page.focus", parsed, profile));
     },
   };
 
@@ -438,9 +491,11 @@ export function buildTools(bridge: BridgeServer) {
     page_snapshot: page_snapshot.handler,
     page_screenshot: page_screenshot.handler,
     page_click: page_click.handler,
+    page_click_xy: page_click_xy.handler,
     page_type: page_type.handler,
     page_scroll: page_scroll.handler,
     page_hover: page_hover.handler,
+    page_focus: page_focus.handler,
     page_press_key: page_press_key.handler,
     page_fill_form: page_fill_form.handler,
     page_handle_dialog: page_handle_dialog.handler,
@@ -466,7 +521,8 @@ export function buildTools(bridge: BridgeServer) {
       "Reliable Excel/Sheets grid pattern (per row): " +
       "page_click(<column-A cell of this row>) → page_type(<value>) → page_press_key(Tab) → page_type(<next value>) → page_press_key(Tab) → … → page_press_key(Enter), " +
       "then re-anchor the next row with another page_click. Don't rely on embedded \\t/\\n in page_type to walk a grid — it races focus. " +
-      "Note: page_screenshot results inside a batch are auto-truncated above ~30KB of base64; if you need the actual bytes, call page_screenshot outside the batch.",
+      "Note: page_screenshot results inside a batch are auto-truncated above ~30KB of base64; if you need the actual bytes, call page_screenshot outside the batch. " +
+      "Caveat: some MCP harnesses misencode long step-args strings containing many literal Tab/newline characters and the steps array arrives at the server as a stringified blob (Zod sees \"expected array, received string\"). For bulk text fill prefer a single direct page_type or page_paste call outside the batch.",
     inputSchema: withProfile(PageBatchParamsSchema),
     handler: async (params) => {
       guard(bridge);
@@ -490,13 +546,21 @@ export function buildTools(bridge: BridgeServer) {
           : step.args;
         try {
           const r = await handler(stepArgs as never);
-          // Tool handlers return { content: [{ type: "text", text: <json> }] }.
-          // Re-parse the inner JSON so the batch result is structured, not stringly-typed.
-          // Then redact oversized base64 payloads so a screenshot in the middle of a
-          // batch can't push the whole tool-result over the model's hard cap (~25k tokens).
-          // The model can still call page_screenshot directly outside the batch when it
-          // actually needs the bytes.
-          const inner = r.content[0]?.text ? JSON.parse(r.content[0].text as string) : null;
+          // Tool handlers return content arrays. Most items are text-JSON; a
+          // few (page_screenshot) are images. For batch results we re-parse
+          // the first text item so the model sees structured per-step results,
+          // and replace any image item with a sentinel — agents that want the
+          // full image should call page_screenshot directly, not inside a batch.
+          const textItem = r.content.find((c) => c.type === "text") as { type: "text"; text: string } | undefined;
+          const imageItem = r.content.find((c) => c.type === "image") as { type: "image"; data: string; mimeType: string } | undefined;
+          let inner: unknown = textItem?.text ? JSON.parse(textItem.text) : null;
+          if (imageItem) {
+            // Annotate the inner result so the model knows an image was returned but elided.
+            inner = {
+              ...(typeof inner === "object" && inner !== null ? inner : {}),
+              image: `<elided ${imageItem.mimeType} ${imageItem.data.length} bytes — call page_screenshot outside the batch to view>`,
+            };
+          }
           results.push({ tool: step.tool, ok: true, result: redactOversizedBase64(inner) });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -513,8 +577,8 @@ export function buildTools(bridge: BridgeServer) {
     browseruse_list_profiles,
     tabs_list, tabs_create, tabs_close, tabs_activate,
     page_navigate, page_snapshot, page_screenshot,
-    page_click, page_type, page_scroll,
-    page_hover, page_press_key, page_fill_form,
+    page_click, page_click_xy, page_type, page_scroll,
+    page_hover, page_focus, page_press_key, page_fill_form,
     page_handle_dialog, page_select, page_upload_file, page_drag,
     session_release,
     page_fetch, page_eval_js, console_read, network_read,

@@ -13,6 +13,9 @@ import {
   PageTypeParamsSchema,
   PageScrollParamsSchema,
   PageHoverParamsSchema,
+  PageFocusParamsSchema,
+  PageFocusResultSchema,
+  PageClickXyParamsSchema,
   PagePressKeyParamsSchema,
   PageFillFormParamsSchema,
   PageHandleDialogParamsSchema,
@@ -187,6 +190,52 @@ describe("protocol round-trip", () => {
   });
   it("page.hover rejects when neither uid nor selector", () => {
     expect(() => PageHoverParamsSchema.parse({ tabId: 1 })).toThrow();
+  });
+
+  // --- focus (loud, verifying) ---
+  it("page.focus defaults mode to auto", () => {
+    const p = PageFocusParamsSchema.parse({ tabId: 1, uid: "e9" });
+    expect(p.mode).toBe("auto");
+    expect(p.includeSnapshot).toBe(false);
+  });
+  it("page.focus accepts every documented mode", () => {
+    for (const mode of ["auto", "js", "click", "blur+click"] as const) {
+      const p = PageFocusParamsSchema.parse({ tabId: 1, uid: "e9", mode });
+      expect(p.mode).toBe(mode);
+    }
+  });
+  it("page.focus rejects unknown mode", () => {
+    expect(() => PageFocusParamsSchema.parse({ tabId: 1, uid: "e9", mode: "yolo" })).toThrow();
+  });
+  it("page.focus rejects when neither uid nor selector", () => {
+    expect(() => PageFocusParamsSchema.parse({ tabId: 1 })).toThrow();
+  });
+  // --- click_xy (coordinate click for virtual canvases) ---
+  it("page.clickXy validates with x/y and defaults button=left", () => {
+    const p = PageClickXyParamsSchema.parse({ tabId: 1, x: 45, y: 107 });
+    expect(p.x).toBe(45);
+    expect(p.y).toBe(107);
+    expect(p.button).toBe("left");
+  });
+  it("page.clickXy rejects negative coordinates", () => {
+    expect(() => PageClickXyParamsSchema.parse({ tabId: 1, x: -1, y: 0 })).toThrow();
+  });
+  it("page.clickXy accepts middle/right button", () => {
+    const r = PageClickXyParamsSchema.parse({ tabId: 1, x: 5, y: 5, button: "right" });
+    expect(r.button).toBe("right");
+  });
+
+  it("page.focus result round-trips with focused=false + actual fields", () => {
+    const r = PageFocusResultSchema.parse({
+      ok: true,
+      focused: false,
+      modeUsed: "blur+click",
+      actualTag: "input",
+      actualRole: "combobox",
+      actualName: "Casella Nome",
+    });
+    expect(r.focused).toBe(false);
+    expect(r.actualName).toBe("Casella Nome");
   });
 
   // --- pressKey ---

@@ -29,6 +29,7 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
         "page.type": { ok: true },
         "page.scroll": { ok: true },
         "page.hover": { ok: true },
+        "page.focus": { ok: true, focused: true, modeUsed: "js" },
         "page.pressKey": { ok: true },
         "page.fillForm": { ok: true, filledCount: 1 },
         "page.handleDialog": { ok: true, handled: true },
@@ -144,12 +145,16 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
     expect(parsed.results.map((s) => s.tool)).toEqual(["page_click", "page_type", "page_screenshot"]);
     expect(parsed.results.every((s) => s.ok)).toBe(true);
     // Wire methods reached the fake extension exactly once each (claim is shared).
+    void parsed;
     expect(seen.filter((m) => m === "page.click").length).toBe(1);
     expect(seen.filter((m) => m === "page.type").length).toBe(1);
     expect(seen.filter((m) => m === "page.screenshot").length).toBe(1);
-    // Inner result was decoded so the screenshot base64 surfaces structurally.
-    const shotResult = parsed.results[2]!.result as { base64: string };
-    expect(shotResult.base64).toBe("AAAA");
+    // Inside a batch, the screenshot's image content is elided with a sentinel
+    // so the batch result stays small. Metadata (format, byteLength) survives.
+    const shotResult = parsed.results[2]!.result as { format: string; image: string; byteLength: number };
+    expect(shotResult.format).toBe("png");
+    expect(shotResult.image).toMatch(/elided/i);
+    expect(shotResult.byteLength).toBe(4);
   });
 
   it("page_batch with stopOnError=false collects per-step errors and keeps running", async () => {
