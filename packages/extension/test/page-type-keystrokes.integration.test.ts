@@ -75,11 +75,13 @@ describeE2E("page_type: real keystrokes reach the page (not Input.insertText)", 
       <h1>Keystroke check</h1>
       <textarea id="t" rows="3" cols="40"></textarea>
       <script>
+        // Record at document level so Tab moving focus off the textarea
+        // doesn't drop subsequent keys from the log. We need to see Enter
+        // and the post-Tab keys, not just whatever the textarea catches.
         window.__keys = [];
-        const el = document.getElementById('t');
-        el.addEventListener('keydown', (e) => {
+        document.addEventListener('keydown', (e) => {
           window.__keys.push({ key: e.key, code: e.code, keyCode: e.keyCode });
-        });
+        }, true);
       </script>
     </body></html>`;
 
