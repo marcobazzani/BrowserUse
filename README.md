@@ -6,11 +6,11 @@ Lets Claude Code drive your real, logged-in Chrome via a local MCP server + MV3 
 
 ## What you get
 
-MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket. Current set (v0.8.0, 24 tools):
+MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket. Current set (v0.9.0, 26 tools):
 
 - **Tabs:** `tabs_list`, `tabs_create`, `tabs_close`, `tabs_activate`
-- **Navigation & read:** `page_navigate`, `page_snapshot` (uid-annotated a11y tree / text / dom), `page_screenshot`
-- **Interact:** `page_click`, `page_type`, `page_hover`, `page_press_key`, `page_scroll`, `page_fill_form`, `page_select`, `page_upload_file`, `page_drag`, `page_handle_dialog`
+- **Navigation & read:** `page_navigate`, `page_snapshot` (uid-annotated a11y tree / text / dom), `page_screenshot` (returns MCP image content for vision-driven flows)
+- **Interact:** `page_click`, `page_click_xy` (vision-driven coordinate click), `page_type`, `page_focus` (loud focus reset for SPAs that grab focus), `page_hover`, `page_press_key`, `page_scroll`, `page_fill_form`, `page_select`, `page_upload_file`, `page_drag`, `page_handle_dialog`
 - **Batch:** `page_batch` — run several tools sequentially in one MCP round-trip (click → type → screenshot, fill multi-step forms, write a whole grid row). Aborts on first error by default; pass `stopOnError: false` to collect per-step errors.
 - **Network / JS:** `page_fetch`, `page_eval_js`, `console_read`, `network_read`
 - **Multi-profile:** `browseruse_list_profiles` + optional `profile` field on every tool
