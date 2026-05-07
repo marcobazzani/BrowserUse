@@ -113,4 +113,82 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
     await tools.page_navigate.handler({ tabId: 1, url: "https://example.com" });
     expect(seen).toEqual(["session.claim", "page.navigate"]);
   });
+
+  it("page_batch runs click + type + screenshot in one MCP call over the real bridge", async () => {
+    const seen: string[] = [];
+    ws.removeAllListeners("message");
+    ws.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      seen.push(req.method);
+      const responders: Record<string, unknown> = {
+        "session.claim":   { ok: true, groupId: 5 },
+        "page.click":      { ok: true },
+        "page.type":       { ok: true },
+        "page.screenshot": { format: "png", base64: "AAAA" },
+      };
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: responders[req.method] }));
+    });
+    const tools = buildTools(server);
+    const r = await tools.page_batch.handler({
+      steps: [
+        { tool: "page_click", args: { tabId: 1, uid: "e5" } },
+        { tool: "page_type",  args: { tabId: 1, uid: "e6", text: "Alice\t30\nBob\t25" } },
+        { tool: "page_screenshot", args: { tabId: 1 } },
+      ],
+    });
+    const parsed = JSON.parse((r.content[0] as any).text) as {
+      ok: boolean;
+      results: Array<{ tool: string; ok: boolean; result?: unknown }>;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.results.map((s) => s.tool)).toEqual(["page_click", "page_type", "page_screenshot"]);
+    expect(parsed.results.every((s) => s.ok)).toBe(true);
+    // Wire methods reached the fake extension exactly once each (claim is shared).
+    expect(seen.filter((m) => m === "page.click").length).toBe(1);
+    expect(seen.filter((m) => m === "page.type").length).toBe(1);
+    expect(seen.filter((m) => m === "page.screenshot").length).toBe(1);
+    // Inner result was decoded so the screenshot base64 surfaces structurally.
+    const shotResult = parsed.results[2]!.result as { base64: string };
+    expect(shotResult.base64).toBe("AAAA");
+  });
+
+  it("page_batch with stopOnError=false collects per-step errors and keeps running", async () => {
+    const seen: string[] = [];
+    ws.removeAllListeners("message");
+    ws.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      seen.push(req.method);
+      if (req.method === "page.type") {
+        ws.send(JSON.stringify({
+          jsonrpc: "2.0", id: req.id,
+          error: { code: -32000, message: "uid not resolved" },
+        }));
+        return;
+      }
+      const responders: Record<string, unknown> = {
+        "session.claim":   { ok: true, groupId: 5 },
+        "page.click":      { ok: true },
+        "page.screenshot": { format: "png", base64: "AAAA" },
+      };
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: responders[req.method] }));
+    });
+    const tools = buildTools(server);
+    const r = await tools.page_batch.handler({
+      stopOnError: false,
+      steps: [
+        { tool: "page_click", args: { tabId: 1, uid: "e5" } },
+        { tool: "page_type",  args: { tabId: 1, uid: "e_bad", text: "x" } },
+        { tool: "page_screenshot", args: { tabId: 1 } },
+      ],
+    });
+    const parsed = JSON.parse((r.content[0] as any).text) as {
+      ok: boolean;
+      results: Array<{ tool: string; ok: boolean; error?: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.results.map((s) => s.ok)).toEqual([true, false, true]);
+    expect(parsed.results[1]!.error).toMatch(/uid not resolved/);
+    // The third step ran even though the second failed.
+    expect(seen).toContain("page.screenshot");
+  });
 });

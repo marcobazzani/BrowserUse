@@ -33,6 +33,39 @@ interface Tool<P> {
   handler: (params: P) => Promise<ToolResult>;
 }
 
+/**
+ * Names of every batchable tool. Kept as a literal union so the model sees
+ * an enum in the JSON schema and can't ask for nonexistent tools. page_batch
+ * is intentionally absent — no batches inside batches.
+ */
+export const BATCHABLE_TOOLS = [
+  "tabs_list", "tabs_create", "tabs_close", "tabs_activate",
+  "page_navigate", "page_snapshot", "page_screenshot",
+  "page_click", "page_type", "page_scroll",
+  "page_hover", "page_press_key", "page_fill_form",
+  "page_handle_dialog", "page_select", "page_upload_file", "page_drag",
+  "page_fetch", "page_eval_js",
+  "console_read", "network_read",
+  "session_release",
+] as const;
+
+export const PageBatchStepSchema = z.object({
+  tool: z.enum(BATCHABLE_TOOLS),
+  args: z.record(z.unknown()),
+}).strict();
+
+/**
+ * Run several BrowserUse tools sequentially in one MCP round-trip. Eliminates
+ * per-step model-loop latency for known sequences (click → type → screenshot,
+ * fill several fields, navigate then snapshot). Steps run in order; the first
+ * failing step aborts by default. stopOnError=false runs every step and
+ * surfaces per-step errors inline.
+ */
+export const PageBatchParamsSchema = z.object({
+  steps: z.array(PageBatchStepSchema).min(1).max(32),
+  stopOnError: z.boolean().default(true),
+}).strict();
+
 const PROFILE_FIELD = z.string().min(1).optional()
   .describe("Target a specific Chrome profile (from browseruse_list_profiles). Omit if only one profile is connected.");
 
@@ -365,6 +398,80 @@ export function buildTools(bridge: BridgeServer) {
     },
   };
 
+  // Tool name → handler. Built once after every tool is defined so page_batch
+  // can dispatch by string. page_batch itself is excluded — no nested batches.
+  const registry: Record<string, (args: never) => Promise<ToolResult>> = {
+    tabs_list: tabs_list.handler,
+    tabs_create: tabs_create.handler,
+    tabs_close: tabs_close.handler,
+    tabs_activate: tabs_activate.handler,
+    page_navigate: page_navigate.handler,
+    page_snapshot: page_snapshot.handler,
+    page_screenshot: page_screenshot.handler,
+    page_click: page_click.handler,
+    page_type: page_type.handler,
+    page_scroll: page_scroll.handler,
+    page_hover: page_hover.handler,
+    page_press_key: page_press_key.handler,
+    page_fill_form: page_fill_form.handler,
+    page_handle_dialog: page_handle_dialog.handler,
+    page_select: page_select.handler,
+    page_upload_file: page_upload_file.handler,
+    page_drag: page_drag.handler,
+    page_fetch: page_fetch.handler,
+    page_eval_js: page_eval_js.handler,
+    console_read: console_read.handler,
+    network_read: network_read.handler,
+    session_release: session_release.handler,
+  };
+
+  const page_batch: Tool<z.infer<ReturnType<typeof withProfile<typeof PageBatchParamsSchema>>>> = {
+    description:
+      "Run several BrowserUse tools sequentially in a single MCP round-trip. " +
+      "Use this when you have a known sequence of actions (click → type → screenshot, " +
+      "fill several fields, navigate then snapshot, write a whole row in Excel) — it " +
+      "eliminates the per-step model loop latency. Steps run in order; by default the " +
+      "first failure aborts the rest. Set stopOnError=false to run every step and " +
+      "collect per-step errors. The batch-level profile (if set) is forwarded to each " +
+      "step that doesn't override it. Cannot nest page_batch inside itself.",
+    inputSchema: withProfile(PageBatchParamsSchema),
+    handler: async (params) => {
+      guard(bridge);
+      const { profile, params: p } = splitProfile(params as Record<string, unknown>);
+      const parsed = PageBatchParamsSchema.parse(p);
+
+      const results: Array<{ tool: string; ok: boolean; result?: unknown; error?: string }> = [];
+      let allOk = true;
+      for (const step of parsed.steps) {
+        const handler = registry[step.tool];
+        if (!handler) {
+          // Schema's z.enum makes this unreachable, but guard against a forgotten
+          // registry entry rather than crashing the whole batch.
+          results.push({ tool: step.tool, ok: false, error: `unknown tool: ${step.tool}` });
+          allOk = false;
+          if (parsed.stopOnError) break;
+          continue;
+        }
+        const stepArgs = profile && !("profile" in step.args)
+          ? { ...step.args, profile }
+          : step.args;
+        try {
+          const r = await handler(stepArgs as never);
+          // Tool handlers return { content: [{ type: "text", text: <json> }] }.
+          // Re-parse the inner JSON so the batch result is structured, not stringly-typed.
+          const inner = r.content[0]?.text ? JSON.parse(r.content[0].text as string) : null;
+          results.push({ tool: step.tool, ok: true, result: inner });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          results.push({ tool: step.tool, ok: false, error: msg });
+          allOk = false;
+          if (parsed.stopOnError) break;
+        }
+      }
+      return text({ ok: allOk, results });
+    },
+  };
+
   return {
     browseruse_list_profiles,
     tabs_list, tabs_create, tabs_close, tabs_activate,
@@ -374,5 +481,6 @@ export function buildTools(bridge: BridgeServer) {
     page_handle_dialog, page_select, page_upload_file, page_drag,
     session_release,
     page_fetch, page_eval_js, console_read, network_read,
+    page_batch,
   };
 }

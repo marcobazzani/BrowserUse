@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildTools } from "../src/tools.js";
+import { buildTools, PageBatchParamsSchema } from "../src/tools.js";
 
 const fakeBridge = () => {
   const calls: Array<{ method: string; params: unknown; profile?: string }> = [];
@@ -331,5 +331,134 @@ describe("tool adapters", () => {
     await tools.page_click.handler({ tabId: 7, uid: "e2", profile: "work" });
     const claims = calls.filter(c => c.method === "session.claim");
     expect(claims.length).toBe(1);
+  });
+});
+
+describe("PageBatchParamsSchema", () => {
+  it("round-trips a 3-step batch with default stopOnError=true", () => {
+    const parsed = PageBatchParamsSchema.parse({
+      steps: [
+        { tool: "page_click", args: { tabId: 1, uid: "e5" } },
+        { tool: "page_type",  args: { tabId: 1, uid: "e6", text: "hi" } },
+        { tool: "page_screenshot", args: { tabId: 1 } },
+      ],
+    });
+    expect(parsed.stopOnError).toBe(true);
+    expect(parsed.steps).toHaveLength(3);
+    expect(parsed.steps[0]!.tool).toBe("page_click");
+  });
+
+  it("rejects an empty steps array", () => {
+    expect(() => PageBatchParamsSchema.parse({ steps: [] })).toThrow();
+  });
+
+  it("rejects unknown tool names", () => {
+    expect(() => PageBatchParamsSchema.parse({
+      steps: [{ tool: "page_nope", args: {} }],
+    })).toThrow();
+  });
+
+  it("rejects nested page_batch (no batches inside batches)", () => {
+    expect(() => PageBatchParamsSchema.parse({
+      steps: [{ tool: "page_batch", args: { steps: [] } }],
+    })).toThrow();
+  });
+});
+
+describe("page_batch handler", () => {
+  it("registers page_batch in the tool map", () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    expect(Object.keys(tools)).toContain("page_batch");
+  });
+
+  it("runs steps sequentially and returns a per-step result array", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    const r = await tools.page_batch.handler({
+      steps: [
+        { tool: "page_click", args: { tabId: 1, uid: "e5" } },
+        { tool: "page_type",  args: { tabId: 1, uid: "e6", text: "hi" } },
+      ],
+    });
+    const parsed = JSON.parse((r.content[0] as any).text) as {
+      ok: boolean;
+      results: Array<{ tool: string; ok: boolean; result?: unknown; error?: string }>;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.results.map((s) => s.tool)).toEqual(["page_click", "page_type"]);
+    expect(parsed.results.every((s) => s.ok)).toBe(true);
+    // Bridge saw the forwarded methods (plus the auto-claim).
+    const methods = calls.map((c) => c.method);
+    expect(methods).toContain("page.click");
+    expect(methods).toContain("page.type");
+  });
+
+  it("aborts on first failure when stopOnError=true (default)", async () => {
+    const { bridge } = fakeBridge();
+    bridge.call = vi.fn(async (method: string) => {
+      if (method === "session.claim") return { ok: true, groupId: 1 };
+      if (method === "page.click") return { ok: true };
+      if (method === "page.type") throw new Error("boom");
+      throw new Error("unexpected " + method);
+    });
+    const tools = buildTools(bridge);
+    const r = await tools.page_batch.handler({
+      steps: [
+        { tool: "page_click", args: { tabId: 1, uid: "e5" } },
+        { tool: "page_type",  args: { tabId: 1, uid: "e6", text: "hi" } },
+        { tool: "page_screenshot", args: { tabId: 1 } },
+      ],
+    });
+    const parsed = JSON.parse((r.content[0] as any).text) as {
+      ok: boolean;
+      results: Array<{ tool: string; ok: boolean; error?: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.results).toHaveLength(2);
+    expect(parsed.results[1]!.ok).toBe(false);
+    expect(parsed.results[1]!.error).toMatch(/boom/);
+  });
+
+  it("continues past failures when stopOnError=false", async () => {
+    const { bridge } = fakeBridge();
+    bridge.call = vi.fn(async (method: string) => {
+      if (method === "session.claim") return { ok: true, groupId: 1 };
+      if (method === "page.click") return { ok: true };
+      if (method === "page.type") throw new Error("boom");
+      if (method === "page.screenshot") return { format: "png", base64: "aGk=" };
+      throw new Error("unexpected " + method);
+    });
+    const tools = buildTools(bridge);
+    const r = await tools.page_batch.handler({
+      stopOnError: false,
+      steps: [
+        { tool: "page_click", args: { tabId: 1, uid: "e5" } },
+        { tool: "page_type",  args: { tabId: 1, uid: "e6", text: "hi" } },
+        { tool: "page_screenshot", args: { tabId: 1 } },
+      ],
+    });
+    const parsed = JSON.parse((r.content[0] as any).text) as {
+      ok: boolean;
+      results: Array<{ tool: string; ok: boolean; error?: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.results).toHaveLength(3);
+    expect(parsed.results.map((s) => s.ok)).toEqual([true, false, true]);
+  });
+
+  it("forwards the batch-level profile to each step", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_batch.handler({
+      profile: "work",
+      steps: [
+        { tool: "page_click", args: { tabId: 1, uid: "e5" } },
+        { tool: "page_type",  args: { tabId: 1, uid: "e6", text: "hi" } },
+      ],
+    });
+    // Every forwarded bridge call carries profile=work.
+    const profiles = new Set(calls.map((c) => c.profile));
+    expect(profiles).toEqual(new Set(["work"]));
   });
 });
