@@ -112,6 +112,34 @@ function splitProfile<P extends Record<string, unknown>>(
   return { params: params as Omit<P, "profile"> };
 }
 
+/**
+ * Walk a parsed tool-result JSON value and replace any string field named
+ * "base64" longer than this threshold with a short sentinel that records the
+ * original length. Used by page_batch to keep multi-step results under the
+ * MCP tool-result size cap when one of the steps is a screenshot. The model
+ * can still call page_screenshot outside the batch to get the actual bytes.
+ *
+ * Threshold ~30KB chosen empirically: a 1280×800 JPEG @ quality 40 is ~76KB
+ * → over the cap; a thumbnail is well under.
+ */
+const BATCH_BASE64_THRESHOLD = 30_000;
+
+function redactOversizedBase64(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactOversizedBase64);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (k === "base64" && typeof v === "string" && v.length > BATCH_BASE64_THRESHOLD) {
+        out[k] = `<truncated: ${v.length} bytes — call page_screenshot directly for the full image>`;
+      } else {
+        out[k] = redactOversizedBase64(v);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
 export function buildTools(bridge: BridgeServer) {
   // Per-profile claim set: a tabId only makes sense within a single Chrome instance.
   const claimed = new Set<string>();
@@ -237,7 +265,8 @@ export function buildTools(bridge: BridgeServer) {
 
   const page_type: Tool<z.infer<ReturnType<typeof withProfile<typeof PageTypeParamsSchema>>>> = {
     description:
-      "Type text into an input/textarea by uid (from a snapshot) or CSS selector. Clears the field first by default. Set submit=true to submit the enclosing form. Set includeSnapshot=true to get an updated accessibility tree in the response. Embedded \\t becomes a Tab key and \\n becomes an Enter key, so a whole grid row or multi-line form can be entered in a single call (e.g. text=\"Name\\tAge\\nAlice\\t30\" types four cells with one round-trip — much faster than calling page_type once per cell).",
+      "Type text into an input/textarea by uid (from a snapshot) or CSS selector. Clears the field first by default. Set submit=true to submit the enclosing form. Set includeSnapshot=true to get an updated accessibility tree in the response. Embedded \\t becomes a Tab key and \\n becomes an Enter key, so a whole multi-line form can be entered in a single call (e.g. text=\"Name\\tAge\\nAlice\\t30\" types four cells with one round-trip). " +
+      "Caveat for spreadsheet grids (Excel for the Web, Google Sheets): embedded \\t and \\n race the cell-focus transition, and typed values can land one column off per row. For grids, use page_batch with an anchored per-cell pattern instead: page_click(rowAnchorCell) → page_type(value) → page_press_key(Tab) per cell, then page_press_key(Enter) and explicitly re-anchor the next row.",
     inputSchema: withProfile(PageTypeParamsSchema),
     handler: async (params) => {
       guard(bridge);
@@ -433,7 +462,11 @@ export function buildTools(bridge: BridgeServer) {
       "eliminates the per-step model loop latency. Steps run in order; by default the " +
       "first failure aborts the rest. Set stopOnError=false to run every step and " +
       "collect per-step errors. The batch-level profile (if set) is forwarded to each " +
-      "step that doesn't override it. Cannot nest page_batch inside itself.",
+      "step that doesn't override it. Cannot nest page_batch inside itself. " +
+      "Reliable Excel/Sheets grid pattern (per row): " +
+      "page_click(<column-A cell of this row>) → page_type(<value>) → page_press_key(Tab) → page_type(<next value>) → page_press_key(Tab) → … → page_press_key(Enter), " +
+      "then re-anchor the next row with another page_click. Don't rely on embedded \\t/\\n in page_type to walk a grid — it races focus. " +
+      "Note: page_screenshot results inside a batch are auto-truncated above ~30KB of base64; if you need the actual bytes, call page_screenshot outside the batch.",
     inputSchema: withProfile(PageBatchParamsSchema),
     handler: async (params) => {
       guard(bridge);
@@ -459,8 +492,12 @@ export function buildTools(bridge: BridgeServer) {
           const r = await handler(stepArgs as never);
           // Tool handlers return { content: [{ type: "text", text: <json> }] }.
           // Re-parse the inner JSON so the batch result is structured, not stringly-typed.
+          // Then redact oversized base64 payloads so a screenshot in the middle of a
+          // batch can't push the whole tool-result over the model's hard cap (~25k tokens).
+          // The model can still call page_screenshot directly outside the batch when it
+          // actually needs the bytes.
           const inner = r.content[0]?.text ? JSON.parse(r.content[0].text as string) : null;
-          results.push({ tool: step.tool, ok: true, result: inner });
+          results.push({ tool: step.tool, ok: true, result: redactOversizedBase64(inner) });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           results.push({ tool: step.tool, ok: false, error: msg });

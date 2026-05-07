@@ -461,4 +461,49 @@ describe("page_batch handler", () => {
     const profiles = new Set(calls.map((c) => c.profile));
     expect(profiles).toEqual(new Set(["work"]));
   });
+
+  it("truncates oversized base64 fields in step results to keep MCP under the cap", async () => {
+    const { bridge } = fakeBridge();
+    const big = "A".repeat(50_000); // 50KB base64 — over the 30KB threshold.
+    bridge.call = vi.fn(async (method: string) => {
+      if (method === "session.claim") return { ok: true, groupId: 1 };
+      if (method === "page.screenshot") return { format: "jpeg", base64: big };
+      if (method === "page.click") return { ok: true };
+      throw new Error("unexpected " + method);
+    });
+    const tools = buildTools(bridge);
+    const r = await tools.page_batch.handler({
+      steps: [
+        { tool: "page_click", args: { tabId: 1, uid: "e5" } },
+        { tool: "page_screenshot", args: { tabId: 1 } },
+      ],
+    });
+    const parsed = JSON.parse((r.content[0] as any).text) as {
+      ok: boolean;
+      results: Array<{ tool: string; ok: boolean; result?: { base64?: string; format?: string } }>;
+    };
+    expect(parsed.ok).toBe(true);
+    const shot = parsed.results[1]!.result!;
+    expect(shot.format).toBe("jpeg");                 // metadata preserved
+    expect(shot.base64!.length).toBeLessThan(200);     // payload replaced with sentinel
+    expect(shot.base64).toMatch(/truncated/i);         // sentinel mentions truncation
+    expect(shot.base64).toMatch(/50000/);              // sentinel reports original size
+  });
+
+  it("leaves small base64 fields intact (under threshold)", async () => {
+    const { bridge } = fakeBridge();
+    bridge.call = vi.fn(async (method: string) => {
+      if (method === "session.claim") return { ok: true, groupId: 1 };
+      if (method === "page.screenshot") return { format: "jpeg", base64: "AAAA" };
+      throw new Error("unexpected " + method);
+    });
+    const tools = buildTools(bridge);
+    const r = await tools.page_batch.handler({
+      steps: [{ tool: "page_screenshot", args: { tabId: 1 } }],
+    });
+    const parsed = JSON.parse((r.content[0] as any).text) as {
+      results: Array<{ result?: { base64?: string } }>;
+    };
+    expect(parsed.results[0]!.result!.base64).toBe("AAAA");
+  });
 });

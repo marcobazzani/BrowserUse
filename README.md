@@ -6,7 +6,7 @@ Lets Claude Code drive your real, logged-in Chrome via a local MCP server + MV3 
 
 ## What you get
 
-MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket. Current set (v0.6.0, 24 tools):
+MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket. Current set (v0.8.0, 24 tools):
 
 - **Tabs:** `tabs_list`, `tabs_create`, `tabs_close`, `tabs_activate`
 - **Navigation & read:** `page_navigate`, `page_snapshot` (uid-annotated a11y tree / text / dom), `page_screenshot`
