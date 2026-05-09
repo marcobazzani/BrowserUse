@@ -405,10 +405,12 @@ function charToKeyDef(ch: string): { key: string; code: string; keyCode: number;
   }
   const punct = PUNCT_KEYCODES[ch];
   if (punct) return { key: ch, code: punct.code, keyCode: punct.keyCode, text: ch };
-  // Unknown character (extended ASCII, accented letters, emoji, …): fire a
-  // generic key event with no virtual-key code so apps don't dispatch
-  // shortcut/control handlers. The text field still inserts the character.
-  return { key: ch, code: "", keyCode: 0, text: ch };
+  // Unknown character (shifted punctuation like @, extended ASCII, accented
+  // letters, emoji): keep `code` non-empty (CDP/Chrome rejects empty code in
+  // some versions and crashes the dispatch) but use windowsVirtualKeyCode 0
+  // so apps don't accidentally fire shortcut/control handlers tied to
+  // ambiguous keyCodes. The `text` field is what gets inserted.
+  return { key: ch, code: ch, keyCode: 0, text: ch };
 }
 
 /* ---------- handlers ---------- */
