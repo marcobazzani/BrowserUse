@@ -1,18 +1,35 @@
 #!/usr/bin/env bash
-# BrowserUse installer — downloads the latest release and registers the MCP
-# server with Claude Code. Pairing is automatic: the extension and the MCP
-# server derive the same token+port from your timezone + OS on each start.
-# No copy-paste, no port config.
+# BrowserUse installer — downloads a release and registers the MCP server
+# with Claude Code (and OpenCode / GitHub Copilot CLI when present).
+# Pairing is automatic: the extension and the MCP server derive the same
+# token+port from your timezone + OS on each start. No copy-paste, no port
+# config.
+#
+# Channels (single install — dev replaces stable, same dir, same MCP name):
+#   stable (default) — latest non-prerelease tag, e.g. v0.10.0
+#   dev              — latest GitHub prerelease tag, e.g. v0.10.0-rc.2
+#                      Re-running with channel=stable later puts you back on
+#                      the latest stable build.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/marcobazzani/BrowserUse/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/marcobazzani/BrowserUse/main/scripts/install-dev.sh | bash
+#
+# Or directly:
+#   BROWSERUSE_CHANNEL=dev bash scripts/install.sh
 #
 set -euo pipefail
 
 REPO="marcobazzani/BrowserUse"
+CHANNEL="${BROWSERUSE_CHANNEL:-stable}"
+case "$CHANNEL" in
+  stable|dev) ;;
+  *) printf '\033[1;31m×  \033[0m Unknown BROWSERUSE_CHANNEL=%s. Use stable|dev.\n' "$CHANNEL" >&2; exit 1 ;;
+esac
 INSTALL_DIR="${HOME}/.browseruse"
 EXT_DIR="${INSTALL_DIR}/extension"
 SERVER_DIR="${INSTALL_DIR}/mcp-server"
+MCP_NAME="browseruse"
 
 _note()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 _warn()  { printf '\033[1;33m!! \033[0m %s\n' "$*" >&2; }
@@ -37,16 +54,33 @@ if [ "$NODE_MAJOR" -lt 20 ]; then
   _die "Node 20+ required (found $(node -v)). Upgrade and re-run."
 fi
 
-# --- Resolve latest version --------------------------------------------------
-# /releases/latest redirects to /releases/tag/vX.Y.Z — no API, no auth, no rate limit.
-_note "Looking up latest BrowserUse release..."
-LATEST_URL="$(curl -fsSI "https://github.com/${REPO}/releases/latest" 2>/dev/null \
-  | sed -n 's#^[Ll]ocation: *\(.*\)#\1#p' | tr -d '\r' | tail -n1)"
-TAG="$(printf '%s' "$LATEST_URL" | sed 's#.*/tag/##')"
+# --- Resolve target version --------------------------------------------------
+if [ "$CHANNEL" = "dev" ]; then
+  # Latest prerelease — uses GitHub REST API (anonymous, low rate limit but
+  # one call per install is fine). Node is already a hard dep so we use it
+  # to parse JSON without needing jq/python on the target machine.
+  _note "Looking up latest BrowserUse PRE-RELEASE..."
+  RELEASES_JSON="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null || true)"
+  TAG="$(printf '%s' "$RELEASES_JSON" \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);const r=a.find(x=>x.prerelease&&!x.draft);process.stdout.write(r?r.tag_name:"");}catch(e){}})' \
+    || true)"
+  if [ -z "${TAG:-}" ]; then
+    _die "Could not resolve latest prerelease. Check your network and rate limit, or set BROWSERUSE_TAG=vX.Y.Z-rc.N to override."
+  fi
+else
+  # /releases/latest redirects to /releases/tag/vX.Y.Z (skips prereleases) —
+  # no API, no auth, no rate limit.
+  _note "Looking up latest BrowserUse release..."
+  LATEST_URL="$(curl -fsSI "https://github.com/${REPO}/releases/latest" 2>/dev/null \
+    | sed -n 's#^[Ll]ocation: *\(.*\)#\1#p' | tr -d '\r' | tail -n1)"
+  TAG="$(printf '%s' "$LATEST_URL" | sed 's#.*/tag/##')"
 
-if [ -z "${TAG:-}" ]; then
-  _die "Could not resolve latest release. Check your network and try again."
+  if [ -z "${TAG:-}" ]; then
+    _die "Could not resolve latest release. Check your network and try again."
+  fi
 fi
+# Explicit override always wins.
+TAG="${BROWSERUSE_TAG:-$TAG}"
 
 EXT_URL="https://github.com/${REPO}/releases/download/${TAG}/browseruse-extension-${TAG}.zip"
 SRV_URL="https://github.com/${REPO}/releases/download/${TAG}/browseruse-mcp-server-${TAG}.tgz"
@@ -81,12 +115,12 @@ if [ ! -f "$ENTRY" ]; then
 fi
 
 if command -v claude >/dev/null 2>&1; then
-  _note "Registering MCP server with Claude Code (user scope)..."
-  if claude mcp list 2>/dev/null | grep -q '^browseruse'; then
-    _note "Existing 'browseruse' MCP entry found — removing and re-adding."
-    claude mcp remove browseruse --scope user >/dev/null 2>&1 || true
+  _note "Registering MCP server with Claude Code (user scope) as '${MCP_NAME}'..."
+  if claude mcp list 2>/dev/null | grep -q "^${MCP_NAME}"; then
+    _note "Existing '${MCP_NAME}' MCP entry found — removing and re-adding."
+    claude mcp remove "${MCP_NAME}" --scope user >/dev/null 2>&1 || true
   fi
-  claude mcp add browseruse --scope user -- node "$ENTRY"
+  claude mcp add "${MCP_NAME}" --scope user -- node "$ENTRY"
   CLAUDE_STATUS="registered"
 else
   _warn "'claude' CLI not found on PATH. Add this manually to ~/.claude/settings.json:"
@@ -94,7 +128,7 @@ else
 
 {
   "mcpServers": {
-    "browseruse": {
+    "${MCP_NAME}": {
       "command": "node",
       "args": ["${ENTRY}"]
     }
@@ -114,12 +148,12 @@ if command -v opencode >/dev/null 2>&1; then
     mkdir -p "$(dirname "$OC_CFG")"
     if [ -f "$OC_CFG" ]; then
       TMP_CFG="$(mktemp)"
-      jq --arg n "node" --arg e "$ENTRY" \
-        '.mcp.browseruse = {"type":"local","command":[$n,$e],"enabled":true}' \
+      jq --arg n "node" --arg e "$ENTRY" --arg k "$MCP_NAME" \
+        '.mcp[$k] = {"type":"local","command":[$n,$e],"enabled":true}' \
         "$OC_CFG" > "$TMP_CFG" && mv "$TMP_CFG" "$OC_CFG"
     else
-      jq -n --arg n "node" --arg e "$ENTRY" \
-        '{"mcp":{"browseruse":{"type":"local","command":[$n,$e],"enabled":true}}}' \
+      jq -n --arg n "node" --arg e "$ENTRY" --arg k "$MCP_NAME" \
+        '{"mcp":{($k):{"type":"local","command":[$n,$e],"enabled":true}}}' \
         > "$OC_CFG"
     fi
     OPENCODE_STATUS="registered"
@@ -129,7 +163,7 @@ if command -v opencode >/dev/null 2>&1; then
 
 {
   "mcp": {
-    "browseruse": {
+    "${MCP_NAME}": {
       "type": "local",
       "command": ["node", "${ENTRY}"],
       "enabled": true
@@ -151,12 +185,12 @@ if command -v copilot >/dev/null 2>&1; then
     mkdir -p "$(dirname "$GH_CFG")"
     if [ -f "$GH_CFG" ]; then
       TMP_CFG="$(mktemp)"
-      jq --arg n "node" --arg e "$ENTRY" \
-        '.servers.browseruse = {"type":"stdio","command":$n,"args":[$e]}' \
+      jq --arg n "node" --arg e "$ENTRY" --arg k "$MCP_NAME" \
+        '.servers[$k] = {"type":"stdio","command":$n,"args":[$e]}' \
         "$GH_CFG" > "$TMP_CFG" && mv "$TMP_CFG" "$GH_CFG"
     else
-      jq -n --arg n "node" --arg e "$ENTRY" \
-        '{"servers":{"browseruse":{"type":"stdio","command":$n,"args":[$e]}}}' \
+      jq -n --arg n "node" --arg e "$ENTRY" --arg k "$MCP_NAME" \
+        '{"servers":{($k):{"type":"stdio","command":$n,"args":[$e]}}}' \
         > "$GH_CFG"
     fi
     COPILOT_STATUS="registered"
@@ -166,7 +200,7 @@ if command -v copilot >/dev/null 2>&1; then
 
 {
   "servers": {
-    "browseruse": {
+    "${MCP_NAME}": {
       "type": "stdio",
       "command": "node",
       "args": ["${ENTRY}"]
