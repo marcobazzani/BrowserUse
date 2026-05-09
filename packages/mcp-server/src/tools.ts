@@ -298,8 +298,8 @@ export function buildTools(bridge: BridgeServer) {
 
   const page_type: Tool<z.infer<ReturnType<typeof withProfile<typeof PageTypeParamsSchema>>>> = {
     description:
-      "Type text into an input/textarea by uid (from a snapshot) or CSS selector. Clears the field first by default. Set submit=true to submit the enclosing form. Set includeSnapshot=true to get an updated accessibility tree in the response. Embedded \\t becomes a Tab key and \\n becomes an Enter key, so a whole multi-line form can be entered in a single call (e.g. text=\"Name\\tAge\\nAlice\\t30\" types four cells with one round-trip). " +
-      "Caveat for spreadsheet grids (Excel for the Web, Google Sheets): embedded \\t and \\n race the cell-focus transition, and typed values can land one column off per row. For grids, use page_batch with an anchored per-cell pattern instead: page_click(rowAnchorCell) → page_type(value) → page_press_key(Tab) per cell, then page_press_key(Enter) and explicitly re-anchor the next row.",
+      "Type text into an input/textarea by uid (from a snapshot) or CSS selector. Clears the field first by default. Set submit=true to submit the enclosing form. Set includeSnapshot=true to get an updated accessibility tree in the response. Embedded \\t becomes a Tab key and \\n becomes an Enter key. " +
+      "If uid AND selector are BOTH omitted, page_type dispatches keystrokes at whatever currently has focus — no element resolution, no focus verification. This is the canonical primitive for typing into a virtual-canvas cell after a page_click_xy: 1) page_screenshot to see the rendered grid, 2) page_click_xy(x, y) to anchor a specific cell, 3) page_type(text=\"value\\tvalue\\t…\") to fill the row, 4) page_press_key(Enter) and repeat. Same pattern works on Excel for the Web, Google Sheets, Figma, Notion — any virtual canvas.",
     inputSchema: withProfile(PageTypeParamsSchema),
     handler: async (params) => {
       guard(bridge);

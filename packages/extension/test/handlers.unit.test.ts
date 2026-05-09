@@ -388,6 +388,88 @@ describe("handlers", () => {
     }
   });
 
+  // page.type WITHOUT uid/selector dispatches at current focus — the
+  // canonical primitive for "click a coordinate then type" virtual-canvas
+  // workflows. No element resolution, no focus verification, just keystrokes.
+  it("page.type without uid/selector dispatches keys at current focus (no DOM lookup)", async () => {
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 322, method: "page.type",
+      params: { tabId: 1, text: "ab", clear: false },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    // No element resolution should have happened.
+    const dom = state.debuggerState.commands.filter(
+      (c: any) => c.method === "DOM.resolveNode" || c.method === "DOM.querySelector",
+    );
+    expect(dom.length).toBe(0);
+    // No JS focus call either.
+    const focus = state.debuggerState.commands.filter(
+      (c: any) => c.method === "Runtime.callFunctionOn" &&
+        typeof c.params?.functionDeclaration === "string" &&
+        c.params.functionDeclaration.includes("focus"),
+    );
+    expect(focus.length).toBe(0);
+    // Just keystrokes for the 2 chars (down + up each).
+    const keys = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchKeyEvent");
+    expect(keys.length).toBe(4);
+  });
+
+  // Punctuation must NOT dispatch as virtual keys. Before this fix, "." was
+  // sent with keyCode 46 — same as the Delete key — so Excel for the Web
+  // interpreted it as forward-delete inside edit mode and ate every period
+  // in emails, URLs, decimals, etc. Regression guard.
+  it("page.type with periods uses keyCode 190 (Period), not 46 (Delete)", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    await d.handle({
+      jsonrpc: "2.0", id: 320, method: "page.type",
+      params: { tabId: 1, uid: uids[1], text: "alice@example.com", clear: false },
+    });
+    const downs = state.debuggerState.commands.filter(
+      (c: any) => c.method === "Input.dispatchKeyEvent" && c.params.type === "keyDown",
+    );
+    const period = downs.find((c: any) => c.params.text === ".");
+    expect(period).toBeDefined();
+    expect(period!.params.windowsVirtualKeyCode).toBe(190);
+    expect(period!.params.code).toBe("Period");
+    expect(period!.params.windowsVirtualKeyCode).not.toBe(46); // not Delete
+    // The @ character has no deterministic punctuation entry; should send
+    // windowsVirtualKeyCode 0 (avoid firing shortcut handlers).
+    const at = downs.find((c: any) => c.params.text === "@");
+    expect(at).toBeDefined();
+    expect(at!.params.windowsVirtualKeyCode).toBe(0);
+  });
+
+  it("page.type maps common punctuation to correct virtual key codes", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    await d.handle({
+      jsonrpc: "2.0", id: 321, method: "page.type",
+      params: { tabId: 1, uid: uids[1], text: ",;'/[\\]-=", clear: false },
+    });
+    const downs = state.debuggerState.commands
+      .filter((c: any) => c.method === "Input.dispatchKeyEvent" && c.params.type === "keyDown")
+      .map((c: any) => ({ text: c.params.text, kc: c.params.windowsVirtualKeyCode, code: c.params.code }));
+    const expected: Array<[string, number, string]> = [
+      [",",  188, "Comma"],
+      [";",  186, "Semicolon"],
+      ["'",  222, "Quote"],
+      ["/",  191, "Slash"],
+      ["[",  219, "BracketLeft"],
+      ["\\", 220, "Backslash"],
+      ["]",  221, "BracketRight"],
+      ["-",  189, "Minus"],
+      ["=",  187, "Equal"],
+    ];
+    for (const [text, kc, code] of expected) {
+      const got = downs.find((d: { text: string }) => d.text === text);
+      expect(got, `missing keydown for ${text}`).toBeDefined();
+      expect(got!.kc).toBe(kc);
+      expect(got!.code).toBe(code);
+    }
+  });
+
   // \t → Tab key, \n → Enter key. Lets a single page.type call enter a
   // whole grid row or multi-line form (Excel for the Web, Google Sheets,
   // chat composers) without per-cell round-trips through the bridge.

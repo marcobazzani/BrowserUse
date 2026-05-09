@@ -79,3 +79,9 @@ jobs:
             browseruse-mcp-server-*.tgz
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # Tags with a hyphen are semver pre-releases (e.g. v0.10.0-rc.1,
+          # v0.10.0-dev.2) — mark them on GitHub so 'Latest release' keeps
+          # pointing at the most recent stable tag. Tag a hyphen-free tag
+          # (e.g. v0.10.0) when the dev/rc passes review on test machines.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') == false }}

@@ -359,21 +359,56 @@ async function dispatchKey(
 }
 
 /**
- * Build a CDP key descriptor for a single character. Mirrors what
- * resolveKey does for single chars, plus a few common control mappings
- * (\n → Enter, \t → Tab) that page_type callers tend to embed in text.
+ * US-keyboard virtual key codes for punctuation. Critical for typing into
+ * apps that branch on keyCode at the keydown level (Excel for the Web,
+ * Sheets, anything with custom shortcut handling). Without this map, "." was
+ * dispatched with keyCode 46 — which is Delete — and Excel ate the period
+ * during edit-mode insertion, silently corrupting emails, URLs, decimals.
+ *
+ * Sources: KeyboardEvent.keyCode legacy table (Mozilla docs), windows
+ * virtual-key codes for the standard US layout.
+ */
+const PUNCT_KEYCODES: Record<string, { code: string; keyCode: number }> = {
+  " ":  { code: "Space",        keyCode: 32  },
+  ".":  { code: "Period",       keyCode: 190 },
+  ",":  { code: "Comma",        keyCode: 188 },
+  ";":  { code: "Semicolon",    keyCode: 186 },
+  "'":  { code: "Quote",        keyCode: 222 },
+  "/":  { code: "Slash",        keyCode: 191 },
+  "\\": { code: "Backslash",    keyCode: 220 },
+  "[":  { code: "BracketLeft",  keyCode: 219 },
+  "]":  { code: "BracketRight", keyCode: 221 },
+  "-":  { code: "Minus",        keyCode: 189 },
+  "=":  { code: "Equal",        keyCode: 187 },
+  "`":  { code: "Backquote",    keyCode: 192 },
+};
+
+/**
+ * Build a CDP key descriptor for a single character. Mirrors what resolveKey
+ * does for single chars, plus a few common control mappings (\n → Enter, \t
+ * → Tab) that page_type callers tend to embed in text.
+ *
+ * For characters we don't have a deterministic virtual-key for (every
+ * non-letter, non-digit, non-mapped-punctuation), we send windowsVirtualKey-
+ * Code 0 so apps don't accidentally fire shortcut handlers — the `text`
+ * field is what gets inserted regardless.
  */
 function charToKeyDef(ch: string): { key: string; code: string; keyCode: number; text?: string } {
   if (ch === "\n" || ch === "\r") return KEY_DEFS.Enter!;
   if (ch === "\t") return KEY_DEFS.Tab!;
-  // Letters → KeyX; digits → DigitX; everything else falls back to the char
-  // itself as code, which most apps tolerate (they read event.key/event.data).
   const upper = ch.toUpperCase();
-  let code = ch;
-  if (/^[A-Z]$/.test(upper)) code = `Key${upper}`;
-  else if (/^[0-9]$/.test(ch)) code = `Digit${ch}`;
-  else if (ch === " ") code = "Space";
-  return { key: ch, code, keyCode: upper.charCodeAt(0), text: ch };
+  if (/^[A-Z]$/.test(upper)) {
+    return { key: ch, code: `Key${upper}`, keyCode: upper.charCodeAt(0), text: ch };
+  }
+  if (/^[0-9]$/.test(ch)) {
+    return { key: ch, code: `Digit${ch}`, keyCode: ch.charCodeAt(0), text: ch };
+  }
+  const punct = PUNCT_KEYCODES[ch];
+  if (punct) return { key: ch, code: punct.code, keyCode: punct.keyCode, text: ch };
+  // Unknown character (extended ASCII, accented letters, emoji, …): fire a
+  // generic key event with no virtual-key code so apps don't dispatch
+  // shortcut/control handlers. The text field still inserts the character.
+  return { key: ch, code: "", keyCode: 0, text: ch };
 }
 
 /* ---------- handlers ---------- */
@@ -417,6 +452,23 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
 
   d.register("page.type", async (raw) => {
     const p = PageTypeParamsSchema.parse(raw);
+
+    // No-target path: no uid, no selector → dispatch keystrokes at the current
+    // focus without resolving or focusing any element. Mirrors Claude in
+    // Chrome's `type` action and is the canonical primitive for typing into
+    // a virtual-canvas cell after page_click_xy lands focus there.
+    if (!p.uid && !p.selector) {
+      try {
+        for (const ch of p.text) {
+          await dispatchKey(mgr, p.tabId, charToKeyDef(ch), 0);
+        }
+      } catch (e) {
+        throw translateCdpError(e);
+      }
+      const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
+      return { ok: true as const, snapshot };
+    }
+
     let el;
     try {
       el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
@@ -449,7 +501,7 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
       throw new Error(
         `page.type couldn't focus the target — activeElement is <${a.actualTag} role="${a.actualRole ?? ""}" name="${a.actualName ?? ""}">. ` +
         `The page is grabbing focus elsewhere (common in Excel/Sheets/Figma). ` +
-        `Try page.focus(uid, mode: "blur+click") or use an app-specific anchor (Excel Name Box, Sheets Cmd+G).`,
+        `Try page.focus(uid, mode: "blur+click") or use an app-specific anchor.`,
       );
     }
 

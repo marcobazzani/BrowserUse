@@ -150,8 +150,13 @@ describe("protocol round-trip", () => {
     const p = PageTypeParamsSchema.parse({ tabId: 1, selector: "#q", text: "hi" });
     expect(p.selector).toBe("#q");
   });
-  it("page.type rejects when neither uid nor selector", () => {
-    expect(() => PageTypeParamsSchema.parse({ tabId: 1, text: "hi" })).toThrow();
+  // No-target typing is the canonical "click a coordinate then type"
+  // primitive: dispatches keystrokes at the current focus. Schema accepts it.
+  it("page.type accepts no uid/selector (types at current focus)", () => {
+    const p = PageTypeParamsSchema.parse({ tabId: 1, text: "hi" });
+    expect(p.uid).toBeUndefined();
+    expect(p.selector).toBeUndefined();
+    expect(p.text).toBe("hi");
   });
   it("page.type defaults submit=false, clear=true, includeSnapshot=false", () => {
     const p = PageTypeParamsSchema.parse({ tabId: 1, uid: "e1", text: "hi" });

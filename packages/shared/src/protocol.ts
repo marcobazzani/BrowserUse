@@ -146,6 +146,14 @@ export const PageClickResultSchema = z.object({
 export const PageTypeParamsSchema = z
   .object({
     tabId: z.number().int(),
+    /**
+     * Optional. When provided, the element is focused (with self-verification)
+     * before typing. When OMITTED, page.type dispatches keystrokes at the
+     * current focus without resolving or focusing any element — useful after
+     * a page_click_xy lands on a virtual-canvas cell that doesn't have a uid
+     * (Excel grid cell, Sheets cell, Figma frame). Mirrors the canonical
+     * "screenshot → coordinate click → type at current focus" pattern.
+     */
     uid: z.string().min(1).optional(),
     selector: z.string().min(1).optional(),
     text: z.string(),
@@ -153,12 +161,7 @@ export const PageTypeParamsSchema = z
     clear: z.boolean().default(true),
     includeSnapshot: z.boolean().default(false),
   })
-  .strict()
-  .superRefine((v, ctx) => {
-    if (!v.uid && !v.selector) {
-      ctx.addIssue({ code: "custom", message: "provide either uid or selector" });
-    }
-  });
+  .strict();
 export const PageTypeResultSchema = z.object({
   ok: z.literal(true),
   snapshot: z.string().optional(),
