@@ -183,14 +183,21 @@ if command -v copilot >/dev/null 2>&1; then
   if command -v jq >/dev/null 2>&1; then
     _note "Registering MCP server with GitHub Copilot CLI..."
     mkdir -p "$(dirname "$GH_CFG")"
+    # Copilot CLI requires the top-level key "mcpServers" (camelCase) — its
+    # config validator rejects the file otherwise with "expected object,
+    # received undefined" on path mcpServers. We also migrate any legacy
+    # ".servers.<name>" entry from older installs into the new shape and
+    # delete it so the config validates cleanly.
     if [ -f "$GH_CFG" ]; then
       TMP_CFG="$(mktemp)"
-      jq --arg n "node" --arg e "$ENTRY" --arg k "$MCP_NAME" \
-        '.servers[$k] = {"type":"stdio","command":$n,"args":[$e]}' \
-        "$GH_CFG" > "$TMP_CFG" && mv "$TMP_CFG" "$GH_CFG"
+      jq --arg n "node" --arg e "$ENTRY" --arg k "$MCP_NAME" '
+        (if (.servers // {}) | has($k) then del(.servers[$k]) else . end) |
+        (if (.servers // {}) == {} then del(.servers) else . end) |
+        .mcpServers[$k] = {"type":"stdio","command":$n,"args":[$e]}
+      ' "$GH_CFG" > "$TMP_CFG" && mv "$TMP_CFG" "$GH_CFG"
     else
       jq -n --arg n "node" --arg e "$ENTRY" --arg k "$MCP_NAME" \
-        '{"servers":{($k):{"type":"stdio","command":$n,"args":[$e]}}}' \
+        '{"mcpServers":{($k):{"type":"stdio","command":$n,"args":[$e]}}}' \
         > "$GH_CFG"
     fi
     COPILOT_STATUS="registered"
@@ -199,7 +206,7 @@ if command -v copilot >/dev/null 2>&1; then
     cat <<EOF
 
 {
-  "servers": {
+  "mcpServers": {
     "${MCP_NAME}": {
       "type": "stdio",
       "command": "node",
