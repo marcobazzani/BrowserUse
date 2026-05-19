@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "BrowserUse",
-  "short_name": "BrowserUse",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtK7fwIZ614PQU3kk84m+qPf5UHzWc9uQ6GgCG4N5g32WP0XMf3PSLBK9RUULKKemqdiu3HS7ww9uxBqpfbYjGigNBQg7VagKdwcOmyJfilSVWw6Mw89o7GhXtHsR/NGETxSUuFJUK7Ly6SZSeVan7BYV+kKrpp4642ZrQSYUy9RLH8swB71UOo6JMgfnHHH/KBFNW3a0U0zK2E49gDNra9wgKw/mq554QkRIi49h8i5ANjFVA6U63OR4GdlixTGvcPi2d0+PSWW+krlT0rKam0F5HrM4UB8GbXb6Xx1JIDDp/oRcCuXYV5JcF8qkIn5aJIuG0rdqMPi9TNKEyRD/wQIDAQAB",
+  "name": "Chromanche",
+  "short_name": "Chromanche",
   "version": "0.10.0",
   "description": "Lets a local MCP server (Claude Code, etc.) drive your logged-in Chrome. Loopback-only. No telemetry.",
   "author": "Marco Bazzani",
-  "homepage_url": "https://github.com/marcobazzani/BrowserUse",
+  "homepage_url": "https://github.com/marcobazzani/Chromanche",
   "permissions": [
     "tabs",
     "tabGroups",

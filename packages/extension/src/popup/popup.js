@@ -1,5 +1,5 @@
 // Popup: shows connection status + pairing info; overrides only used if user has
-// manually configured BROWSERUSE_TOKEN / BROWSERUSE_PORT on the server side.
+// manually configured CHROMANCHE_TOKEN / CHROMANCHE_PORT on the server side.
 
 const statusEl = document.getElementById("status");
 const pairingEl = document.getElementById("pairing");
@@ -10,7 +10,7 @@ const clearEl = document.getElementById("clear");
 const profileLabelEl = document.getElementById("profileLabel");
 const saveLabelEl = document.getElementById("saveLabel");
 
-const SALT = "browseruse-bridge-v1";
+const SALT = "chromanche-bridge-v1";
 
 function normalizePlatform(input) {
   const s = String(input).toLowerCase();

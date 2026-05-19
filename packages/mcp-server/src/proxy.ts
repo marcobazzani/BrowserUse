@@ -55,7 +55,7 @@ export async function runProxy(cfg: Config): Promise<void> {
         const frame = parsed as { type?: unknown; msg?: unknown };
         if (frame.type === "mcp-response" && frame.msg) {
           stdio.send(frame.msg as JSONRPCMessage).catch((err) =>
-            console.error("[browseruse-proxy] stdio send error:", err),
+            console.error("[chromanche-proxy] stdio send error:", err),
           );
         }
       }
@@ -67,7 +67,7 @@ export async function runProxy(cfg: Config): Promise<void> {
       attempt += 1;
       if (delay >= 30_000 && attempt > 8) {
         console.error(
-          `[browseruse-proxy] hub at ${url} has been unavailable for too long — exiting so Claude Code surfaces the disconnect.`,
+          `[chromanche-proxy] hub at ${url} has been unavailable for too long — exiting so Claude Code surfaces the disconnect.`,
         );
         process.exit(1);
       }
@@ -85,7 +85,7 @@ export async function runProxy(cfg: Config): Promise<void> {
       if (ws !== next) return;
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ECONNREFUSED") {
-        console.error("[browseruse-proxy] ws error:", err);
+        console.error("[chromanche-proxy] ws error:", err);
       }
       // close handler will schedule reconnect
     });

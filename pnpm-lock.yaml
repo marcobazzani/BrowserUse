@@ -20,7 +20,7 @@ importers:
 
   packages/extension:
     dependencies:
-      '@browseruse/shared':
+      '@chromanche/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -51,7 +51,7 @@ importers:
 
   packages/mcp-server:
     dependencies:
-      '@browseruse/shared':
+      '@chromanche/shared':
         specifier: workspace:*
         version: link:../shared
       '@modelcontextprotocol/sdk':

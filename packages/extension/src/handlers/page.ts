@@ -1,5 +1,5 @@
 import type { Dispatcher } from "../dispatcher.js";
-import { PageNavigateParamsSchema } from "@browseruse/shared";
+import { PageNavigateParamsSchema } from "@chromanche/shared";
 
 function waitForTabLoad(tabId: number, waitUntil: "load" | "domcontentloaded"): Promise<string> {
   return new Promise((resolve) => {

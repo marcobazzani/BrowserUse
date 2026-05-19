@@ -7,7 +7,7 @@ import {
   RpcResponseSchema,
   type RpcResponse,
   type ProfileInfo,
-} from "@browseruse/shared";
+} from "@chromanche/shared";
 
 export type ProxyHandler = (ws: WebSocket) => void;
 
@@ -107,7 +107,7 @@ export class BridgeServer {
       this.wss.on("connection", (ws) => this.onConnection(ws));
       this.wss.once("error", onStartupError);
       this.wss.on("error", (err) => {
-        console.error("[browseruse] wss error:", err);
+        console.error("[chromanche] wss error:", err);
       });
     });
   }
@@ -239,7 +239,7 @@ export class BridgeServer {
         .map((p) => `${p.tag} (${p.label})`)
         .join(", ");
       throw new Error(
-        `multiple profiles connected: ${available}. Call browseruse_list_profiles then pass profile="<tag>" to target one.`,
+        `multiple profiles connected: ${available}. Call chromanche_list_profiles then pass profile="<tag>" to target one.`,
       );
     }
     if (!entry || entry.ws.readyState !== WebSocket.OPEN) {

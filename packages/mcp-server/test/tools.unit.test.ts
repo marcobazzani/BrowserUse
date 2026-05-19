@@ -303,10 +303,10 @@ describe("tool adapters", () => {
   });
 
   // --- multi-profile ---
-  it("browseruse_list_profiles returns the bridge's connected extensions", async () => {
+  it("chromanche_list_profiles returns the bridge's connected extensions", async () => {
     const { bridge } = fakeBridge();
     const tools = buildTools(bridge);
-    const result = await tools.browseruse_list_profiles.handler({});
+    const result = await tools.chromanche_list_profiles.handler({});
     const parsed = JSON.parse((result.content[0] as any).text);
     expect(parsed).toEqual([
       { tag: "work", label: "Work", connectedAt: 1000 },

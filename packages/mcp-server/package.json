@@ -1,9 +1,9 @@
 {
-  "name": "@browseruse/mcp-server",
+  "name": "@chromanche/mcp-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "browseruse-mcp": "./dist/index.cjs" },
+  "bin": { "chromanche-mcp": "./dist/index.cjs" },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -13,7 +13,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@browseruse/shared": "workspace:*",
+    "@chromanche/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "1.0.3",
     "ws": "8.18.0",
     "zod": "3.23.8",

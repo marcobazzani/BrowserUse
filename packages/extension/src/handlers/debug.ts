@@ -6,7 +6,7 @@ import {
   ConsoleReadParamsSchema,
   NetworkReadParamsSchema,
   PageFetchParamsSchema,
-} from "@browseruse/shared";
+} from "@chromanche/shared";
 
 type RuntimeEvaluateResult = {
   result: { type: string; value?: unknown; description?: string };

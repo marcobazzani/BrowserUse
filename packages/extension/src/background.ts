@@ -1,7 +1,7 @@
 import { Dispatcher } from "./dispatcher.js";
 import { WsClient } from "./ws-client.js";
 import { registerHandlers } from "./handlers/index.js";
-import { derivePairing, getTimezone } from "@browseruse/shared";
+import { derivePairing, getTimezone } from "@chromanche/shared";
 
 const dispatcher = new Dispatcher();
 registerHandlers(dispatcher);
@@ -117,7 +117,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 // Keep the MV3 service worker warm: Chrome parks it after ~30s idle.
-chrome.alarms.create("browseruse-keepalive", { periodInMinutes: 25 / 60 });
+chrome.alarms.create("chromanche-keepalive", { periodInMinutes: 25 / 60 });
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === "browseruse-keepalive") client.ping();
+  if (a.name === "chromanche-keepalive") client.ping();
 });

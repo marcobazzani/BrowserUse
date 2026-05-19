@@ -8,7 +8,7 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     env:
-      BROWSERUSE_E2E: "1"
+      CHROMANCHE_E2E: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -21,10 +21,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
-      - run: pnpm -F @browseruse/extension exec playwright install --with-deps chromium
+      - run: pnpm -F @chromanche/extension exec playwright install --with-deps chromium
 
       - name: run e2e under xvfb
-        run: xvfb-run -a pnpm -F @browseruse/extension test:integration
+        run: xvfb-run -a pnpm -F @chromanche/extension test:integration
 
       - name: upload Playwright artefacts on failure
         if: failure()

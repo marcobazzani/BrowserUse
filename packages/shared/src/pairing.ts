@@ -15,10 +15,10 @@
  *     same library to compute the key); it protects against accidental
  *     localhost clashes (other services on the same port) and cross-origin
  *     web pages that don't know the protocol
- *   - users who need stronger auth can still set BROWSERUSE_TOKEN explicitly
+ *   - users who need stronger auth can still set CHROMANCHE_TOKEN explicitly
  */
 
-const SALT = "browseruse-bridge-v1";
+const SALT = "chromanche-bridge-v1";
 
 /** Normalize platform strings across Node (os.platform()) and Chrome (runtime.getPlatformInfo().os). */
 export function normalizePlatform(input: string): "mac" | "linux" | "win" | "cros" | "other" {

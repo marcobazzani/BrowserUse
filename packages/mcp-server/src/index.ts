@@ -15,7 +15,7 @@ import { WebSocketServerTransport } from "./ws-transport.js";
 function buildMcpServer(bridge: BridgeServer): Server {
   const tools = buildTools(bridge);
   const server = new Server(
-    { name: "browseruse", version: "0.6.1" },
+    { name: "chromanche", version: "0.6.1" },
     { capabilities: { tools: {} } }
   );
 
@@ -44,7 +44,7 @@ async function runLeader(cfg: Config): Promise<void> {
   await bridge.listen(cfg.port);
   const mode = cfg.derived ? "derived" : "explicit (env)";
   console.error(
-    `[browseruse] leader on ws://127.0.0.1:${cfg.port}. Token: ${cfg.token.slice(0, 8)}... (${mode}; file: ${cfg.tokenFile})`,
+    `[chromanche] leader on ws://127.0.0.1:${cfg.port}. Token: ${cfg.token.slice(0, 8)}... (${mode}; file: ${cfg.tokenFile})`,
   );
 
   // Accept follower Claude Code sessions via WS proxy handshake.
@@ -52,9 +52,9 @@ async function runLeader(cfg: Config): Promise<void> {
     const server = buildMcpServer(bridge);
     const transport = new WebSocketServerTransport(ws);
     server.connect(transport).catch((err) =>
-      console.error("[browseruse] proxy server connect error:", err),
+      console.error("[chromanche] proxy server connect error:", err),
     );
-    console.error("[browseruse] accepted a follower MCP proxy connection.");
+    console.error("[chromanche] accepted a follower MCP proxy connection.");
   });
 
   // Host this session's own stdio MCP as usual.
@@ -63,7 +63,7 @@ async function runLeader(cfg: Config): Promise<void> {
   await server.connect(transport);
 
   const shutdown = () => {
-    bridge.close().catch((err) => console.error("[browseruse] close error:", err))
+    bridge.close().catch((err) => console.error("[chromanche] close error:", err))
       .finally(() => process.exit(0));
   };
   process.on("SIGINT", shutdown);
@@ -87,7 +87,7 @@ async function main(): Promise<void> {
     const code = (err as NodeJS.ErrnoException | undefined)?.code;
     if (code === "EADDRINUSE") {
       console.error(
-        `[browseruse] port ${cfg.port} already in use — another Claude Code session is the leader. Joining as proxy.`,
+        `[chromanche] port ${cfg.port} already in use — another Claude Code session is the leader. Joining as proxy.`,
       );
       await runProxy(cfg);
       return;
@@ -97,6 +97,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("[browseruse] fatal:", err);
+  console.error("[chromanche] fatal:", err);
   process.exit(1);
 });

@@ -1,4 +1,4 @@
-import type { RpcRequest, RpcResponse } from "@browseruse/shared";
+import type { RpcRequest, RpcResponse } from "@chromanche/shared";
 
 export type Handler = (params: unknown) => Promise<unknown>;
 

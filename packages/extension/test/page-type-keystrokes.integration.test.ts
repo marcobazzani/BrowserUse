@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const extDir = resolve(here, "../dist");
 const serverEntry = resolve(here, "../../mcp-server/dist/index.cjs");
 
-const SHOULD_RUN = process.env.BROWSERUSE_E2E === "1";
+const SHOULD_RUN = process.env.CHROMANCHE_E2E === "1";
 const describeE2E = SHOULD_RUN ? describe : describe.skip;
 
 const PORT = "59335";
@@ -106,7 +106,7 @@ describeE2E("page_type: real keystrokes reach the page (not Input.insertText)", 
     const transport = new StdioClientTransport({
       command: "node",
       args: [serverEntry],
-      env: { ...process.env, BROWSERUSE_PORT: PORT, BROWSERUSE_TOKEN: TOKEN },
+      env: { ...process.env, CHROMANCHE_PORT: PORT, CHROMANCHE_TOKEN: TOKEN },
     });
     await client.connect(transport);
     mcpClient = client as unknown as typeof mcpClient;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# BrowserUse installer — downloads a release and registers the MCP server
+# Chromanche installer — downloads a release and registers the MCP server
 # with Claude Code (and OpenCode / GitHub Copilot CLI when present).
 # Pairing is automatic: the extension and the MCP server derive the same
 # token+port from your timezone + OS on each start. No copy-paste, no port
@@ -12,24 +12,24 @@
 #                      the latest stable build.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/marcobazzani/BrowserUse/main/scripts/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/marcobazzani/BrowserUse/main/scripts/install-dev.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/marcobazzani/Chromanche/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/marcobazzani/Chromanche/main/scripts/install-dev.sh | bash
 #
 # Or directly:
-#   BROWSERUSE_CHANNEL=dev bash scripts/install.sh
+#   CHROMANCHE_CHANNEL=dev bash scripts/install.sh
 #
 set -euo pipefail
 
-REPO="marcobazzani/BrowserUse"
-CHANNEL="${BROWSERUSE_CHANNEL:-stable}"
+REPO="marcobazzani/Chromanche"
+CHANNEL="${CHROMANCHE_CHANNEL:-stable}"
 case "$CHANNEL" in
   stable|dev) ;;
-  *) printf '\033[1;31m×  \033[0m Unknown BROWSERUSE_CHANNEL=%s. Use stable|dev.\n' "$CHANNEL" >&2; exit 1 ;;
+  *) printf '\033[1;31m×  \033[0m Unknown CHROMANCHE_CHANNEL=%s. Use stable|dev.\n' "$CHANNEL" >&2; exit 1 ;;
 esac
-INSTALL_DIR="${HOME}/.browseruse"
+INSTALL_DIR="${HOME}/.chromanche"
 EXT_DIR="${INSTALL_DIR}/extension"
 SERVER_DIR="${INSTALL_DIR}/mcp-server"
-MCP_NAME="browseruse"
+MCP_NAME="chromanche"
 
 _note()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 _warn()  { printf '\033[1;33m!! \033[0m %s\n' "$*" >&2; }
@@ -59,18 +59,18 @@ if [ "$CHANNEL" = "dev" ]; then
   # Latest prerelease — uses GitHub REST API (anonymous, low rate limit but
   # one call per install is fine). Node is already a hard dep so we use it
   # to parse JSON without needing jq/python on the target machine.
-  _note "Looking up latest BrowserUse PRE-RELEASE..."
+  _note "Looking up latest Chromanche PRE-RELEASE..."
   RELEASES_JSON="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null || true)"
   TAG="$(printf '%s' "$RELEASES_JSON" \
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);const r=a.find(x=>x.prerelease&&!x.draft);process.stdout.write(r?r.tag_name:"");}catch(e){}})' \
     || true)"
   if [ -z "${TAG:-}" ]; then
-    _die "Could not resolve latest prerelease. Check your network and rate limit, or set BROWSERUSE_TAG=vX.Y.Z-rc.N to override."
+    _die "Could not resolve latest prerelease. Check your network and rate limit, or set CHROMANCHE_TAG=vX.Y.Z-rc.N to override."
   fi
 else
   # /releases/latest redirects to /releases/tag/vX.Y.Z (skips prereleases) —
   # no API, no auth, no rate limit.
-  _note "Looking up latest BrowserUse release..."
+  _note "Looking up latest Chromanche release..."
   LATEST_URL="$(curl -fsSI "https://github.com/${REPO}/releases/latest" 2>/dev/null \
     | sed -n 's#^[Ll]ocation: *\(.*\)#\1#p' | tr -d '\r' | tail -n1)"
   TAG="$(printf '%s' "$LATEST_URL" | sed 's#.*/tag/##')"
@@ -80,16 +80,28 @@ else
   fi
 fi
 # Explicit override always wins.
-TAG="${BROWSERUSE_TAG:-$TAG}"
+TAG="${CHROMANCHE_TAG:-$TAG}"
 
-EXT_URL="https://github.com/${REPO}/releases/download/${TAG}/browseruse-extension-${TAG}.zip"
-SRV_URL="https://github.com/${REPO}/releases/download/${TAG}/browseruse-mcp-server-${TAG}.tgz"
+EXT_URL="https://github.com/${REPO}/releases/download/${TAG}/chromanche-extension-${TAG}.zip"
+SRV_URL="https://github.com/${REPO}/releases/download/${TAG}/chromanche-mcp-server-${TAG}.tgz"
 
 _note "Installing ${REPO} ${TAG}"
 
 # --- Download + unpack -------------------------------------------------------
-TMP="$(mktemp -d -t browseruse-install.XXXXXX)"
+TMP="$(mktemp -d -t chromanche-install.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
+
+# --- Remove any legacy BrowserUse install -----------------------------------
+# BrowserUse was renamed to Chromanche (trademark). Nothing is migrated — the
+# old install is dropped so the fresh one takes over cleanly. Fetch the helper
+# scripts from the repo so this works whether install.sh was piped from curl
+# or run from a local clone.
+RAW="https://raw.githubusercontent.com/${REPO}/${TAG}"
+mkdir -p "${TMP}/lib"
+if curl -fsSL -o "${TMP}/cleanup-legacy.sh" "${RAW}/scripts/cleanup-legacy.sh" 2>/dev/null \
+   && curl -fsSL -o "${TMP}/lib/mcp-config.mjs" "${RAW}/scripts/lib/mcp-config.mjs" 2>/dev/null; then
+  bash "${TMP}/cleanup-legacy.sh" || _warn "Legacy BrowserUse cleanup hit an error — continuing."
+fi
 
 _note "Downloading extension..."
 curl -fsSL -o "${TMP}/extension.zip" "$EXT_URL"
@@ -224,7 +236,7 @@ fi
 cat <<EOF
 
 ------------------------------------------------------------------
-  BrowserUse ${TAG} installed.
+  Chromanche ${TAG} installed.
 ------------------------------------------------------------------
 
   Extension:   ${EXT_DIR}
@@ -236,14 +248,14 @@ cat <<EOF
   2. Enable "Developer mode" (top-right toggle)
   3. Click "Load unpacked" and select:
        ${EXT_DIR}
-  4. Pin the BrowserUse toolbar icon (puzzle-piece menu → pin)
+  4. Pin the Chromanche toolbar icon (puzzle-piece menu → pin)
   5. Start Claude Code, OpenCode, or GitHub Copilot CLI and try:
        "open https://example.com in a new tab and tell me the title"
 
   Pairing is automatic — the extension and MCP server derive a matching
   token and port from your timezone + OS. No paste needed. If you ever
   need to override (port conflict, multi-user workstation), set
-  BROWSERUSE_TOKEN / BROWSERUSE_PORT on the server and paste matching
+  CHROMANCHE_TOKEN / CHROMANCHE_PORT on the server and paste matching
   values in the extension popup's advanced section.
 
 EOF
