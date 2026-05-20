@@ -42,7 +42,7 @@ describe("proxy end-to-end", () => {
     hub.setProxyHandler((ws) => {
       const tools = buildTools(hub);
       const server = new Server(
-        { name: "browseruse-test", version: "0.0.0" },
+        { name: "chromanche-test", version: "0.0.0" },
         { capabilities: { tools: {} } },
       );
       server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -116,7 +116,7 @@ describe("proxy end-to-end", () => {
       capabilities: {},
       clientInfo: { name: "test-proxy", version: "0.0.0" },
     });
-    expect(resp.result?.serverInfo?.name).toBe("browseruse-test");
+    expect(resp.result?.serverInfo?.name).toBe("chromanche-test");
   });
 
   it("tools/list returns the full tool catalog via the proxy", async () => {
@@ -128,7 +128,7 @@ describe("proxy end-to-end", () => {
     });
     const resp = await proxyRpc<any>("tools/list", {});
     const names: string[] = resp.result.tools.map((t: any) => t.name);
-    expect(names).toContain("browseruse_list_profiles");
+    expect(names).toContain("chromanche_list_profiles");
     expect(names).toContain("page_snapshot");
     expect(names).toContain("tabs_list");
   });

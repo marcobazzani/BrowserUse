@@ -1,4 +1,4 @@
-# BrowserUse — engineering guardrails
+# Chromanche — engineering guardrails
 
 This project is a self-hosted alternative to "Claude in Chrome": a Chrome MV3 extension plus a local Node.js MCP server that lets Claude Code drive the user's real, logged-in Chrome. Works with any Claude Code backend (Anthropic API, AWS Bedrock, Google Vertex, self-hosted gateway). Because the agent operates on a logged-in daily browser — Gmail, banking, internal tools — regressions have real blast radius.
 

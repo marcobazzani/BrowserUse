@@ -116,12 +116,12 @@ export class DebuggerManager {
       // opaque internal one.
       if (/chrome-extension:\/\/.*different extension/i.test(msg)) {
         throw new Error(
-          "BrowserUse can't attach to this tab because another Chrome " +
+          "Chromanche can't attach to this tab because another Chrome " +
           "extension has injected a chrome-extension:// iframe — Chrome " +
           "refuses debugger attach in that case. Most common culprits, in " +
           "order: (1) Anthropic's \"Claude in Chrome\" / Claude Code " +
           "extension (also drives Chrome via debugger and conflicts with " +
-          "BrowserUse on every page); (2) password managers (1Password, " +
+          "Chromanche on every page); (2) password managers (1Password, " +
           "Bitwarden, LastPass) on login forms; (3) shopping helpers (Honey, " +
           "Capital One Shopping). Disable the offending extension globally " +
           "or per-site, or use an Incognito window without extensions."

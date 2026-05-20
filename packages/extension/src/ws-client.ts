@@ -1,5 +1,5 @@
 import type { Dispatcher } from "./dispatcher.js";
-import { RpcRequestSchema } from "@browseruse/shared";
+import { RpcRequestSchema } from "@chromanche/shared";
 
 export function nextBackoffMs(attempt: number): number {
   return Math.min(500 * 2 ** attempt, 30_000);

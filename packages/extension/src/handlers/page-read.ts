@@ -1,5 +1,5 @@
 import type { Dispatcher } from "../dispatcher.js";
-import { PageSnapshotParamsSchema, PageScreenshotParamsSchema } from "@browseruse/shared";
+import { PageSnapshotParamsSchema, PageScreenshotParamsSchema } from "@chromanche/shared";
 import { resolveTabId } from "../lib/active-tab.js";
 import { captureA11ySnapshot } from "../lib/snapshot-manager.js";
 import type { DebuggerManager } from "../lib/debugger-manager.js";

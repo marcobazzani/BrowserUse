@@ -10,7 +10,7 @@ jobs:
   e2e-gate:
     runs-on: ubuntu-latest
     env:
-      BROWSERUSE_E2E: "1"
+      CHROMANCHE_E2E: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -23,10 +23,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
-      - run: pnpm -F @browseruse/extension exec playwright install --with-deps chromium
+      - run: pnpm -F @chromanche/extension exec playwright install --with-deps chromium
 
       - name: run e2e under xvfb
-        run: xvfb-run -a pnpm -F @browseruse/extension test:integration
+        run: xvfb-run -a pnpm -F @chromanche/extension test:integration
 
       - name: upload Playwright artefacts on failure
         if: failure()
@@ -55,28 +55,28 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm -F @browseruse/shared build
-      - run: pnpm -F @browseruse/mcp-server build
-      - run: pnpm -F @browseruse/extension build
+      - run: pnpm -F @chromanche/shared build
+      - run: pnpm -F @chromanche/mcp-server build
+      - run: pnpm -F @chromanche/extension build
 
       - name: package extension
         run: |
           cd packages/extension/dist
-          zip -r "${{ github.workspace }}/browseruse-extension-${{ github.ref_name }}.zip" .
+          zip -r "${{ github.workspace }}/chromanche-extension-${{ github.ref_name }}.zip" .
 
       - name: package mcp-server
         run: |
           cd packages/mcp-server
-          tar -czf "${{ github.workspace }}/browseruse-mcp-server-${{ github.ref_name }}.tgz" \
+          tar -czf "${{ github.workspace }}/chromanche-mcp-server-${{ github.ref_name }}.tgz" \
             dist package.json README.md 2>/dev/null || \
-          tar -czf "${{ github.workspace }}/browseruse-mcp-server-${{ github.ref_name }}.tgz" \
+          tar -czf "${{ github.workspace }}/chromanche-mcp-server-${{ github.ref_name }}.tgz" \
             dist package.json
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            browseruse-extension-*.zip
-            browseruse-mcp-server-*.tgz
+            chromanche-extension-*.zip
+            chromanche-mcp-server-*.tgz
           generate_release_notes: true
           fail_on_unmatched_files: true
           # Tags with a hyphen are semver pre-releases (e.g. v0.10.0-rc.1,

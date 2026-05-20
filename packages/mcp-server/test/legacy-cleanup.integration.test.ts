@@ -1,0 +1,70 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+/**
+ * Drives scripts/cleanup-legacy.sh against a throwaway $HOME seeded with a
+ * fake legacy "browseruse" install: an installed dir plus a registered MCP
+ * entry in each of the three client configs. Asserts the old name is gone
+ * everywhere and unrelated servers survive. No network — only the cleanup
+ * path of the installer is exercised.
+ */
+const SCRIPT = fileURLToPath(new URL("../../../scripts/cleanup-legacy.sh", import.meta.url));
+
+let home: string;
+
+const claudeCfg = () => join(home, ".claude", "settings.json");
+const opencodeCfg = () => join(home, ".opencode", "config.json");
+const copilotCfg = () => join(home, ".copilot", "mcp-config.json");
+const readJson = (p: string) => JSON.parse(readFileSync(p, "utf8"));
+
+const writeJson = (dir: string, file: string, data: unknown) => {
+  mkdirSync(join(home, dir), { recursive: true });
+  writeFileSync(join(home, dir, file), JSON.stringify(data, null, 2));
+};
+
+const run = () =>
+  execFileSync("bash", [SCRIPT], {
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+  });
+
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "chromanche-cleanup-"));
+});
+afterEach(() => {
+  rmSync(home, { recursive: true, force: true });
+});
+
+describe("cleanup-legacy.sh", () => {
+  it("removes the legacy install dir and every browseruse MCP entry", () => {
+    mkdirSync(join(home, ".browseruse", "mcp-server"), { recursive: true });
+    writeFileSync(join(home, ".browseruse", "token"), "x");
+
+    writeJson(".claude", "settings.json", {
+      mcpServers: { browseruse: { command: "node" }, keepme: { command: "x" } },
+    });
+    writeJson(".opencode", "config.json", {
+      mcp: { browseruse: { type: "local" }, keepme: { type: "local" } },
+    });
+    writeJson(".copilot", "mcp-config.json", {
+      mcpServers: { browseruse: { type: "stdio" }, keepme: { type: "stdio" } },
+    });
+
+    run();
+
+    expect(existsSync(join(home, ".browseruse"))).toBe(false);
+    expect(readJson(claudeCfg()).mcpServers).toEqual({ keepme: { command: "x" } });
+    expect(readJson(opencodeCfg()).mcp).toEqual({ keepme: { type: "local" } });
+    expect(readJson(copilotCfg()).mcpServers).toEqual({ keepme: { type: "stdio" } });
+  });
+
+  it("is a no-op when there is no legacy install", () => {
+    writeJson(".claude", "settings.json", { mcpServers: { chromanche: {} } });
+    expect(() => run()).not.toThrow();
+    expect(readJson(claudeCfg()).mcpServers).toEqual({ chromanche: {} });
+  });
+});

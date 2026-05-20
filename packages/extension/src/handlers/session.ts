@@ -1,5 +1,5 @@
 import type { Dispatcher } from "../dispatcher.js";
-import { SessionClaimParamsSchema, SessionReleaseParamsSchema } from "@browseruse/shared";
+import { SessionClaimParamsSchema, SessionReleaseParamsSchema } from "@chromanche/shared";
 
 let claudeGroupId: number | null = null;
 const claimed = new Set<number>();
@@ -21,19 +21,19 @@ async function ensureGroup(tabId: number): Promise<number> {
 
 // Runs in the target page; must be self-contained (no closures over outer scope).
 function overlayIn() {
-  if (document.querySelector('div[data-browseruse="overlay"]')) return;
+  if (document.querySelector('div[data-chromanche="overlay"]')) return;
   const host = document.createElement("div");
-  host.setAttribute("data-browseruse", "overlay");
+  host.setAttribute("data-chromanche", "overlay");
   host.style.cssText =
     "position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
   const shadow = host.attachShadow({ mode: "open" });
   shadow.innerHTML = [
     "<style>",
-    "@keyframes browseruse-pulse {",
+    "@keyframes chromanche-pulse {",
     "  0%, 100% { box-shadow: inset 0 0 0 4px #FFB020, inset 0 0 24px rgba(255,140,0,0.35); }",
     "  50%      { box-shadow: inset 0 0 0 4px #FF8C00, inset 0 0 32px rgba(255,140,0,0.55); }",
     "}",
-    ".frame { position: fixed; inset: 0; pointer-events: none; animation: browseruse-pulse 2s ease-in-out infinite; }",
+    ".frame { position: fixed; inset: 0; pointer-events: none; animation: chromanche-pulse 2s ease-in-out infinite; }",
     ".pill {",
     "  position: fixed; top: 12px; right: 12px; padding: 6px 12px;",
     "  background: #FF8C00; color: white; border-radius: 9999px;",
@@ -48,7 +48,7 @@ function overlayIn() {
 }
 
 function overlayOut() {
-  document.querySelector('div[data-browseruse="overlay"]')?.remove();
+  document.querySelector('div[data-chromanche="overlay"]')?.remove();
 }
 
 async function injectOverlay(tabId: number) {

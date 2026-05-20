@@ -9,7 +9,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const extDir = resolve(here, "../dist");
 const serverEntry = resolve(here, "../../mcp-server/dist/index.cjs");
 
-const SHOULD_RUN = process.env.BROWSERUSE_E2E === "1";
+const SHOULD_RUN = process.env.CHROMANCHE_E2E === "1";
 const describeE2E = SHOULD_RUN ? describe : describe.skip;
 
 const PORT = "59322";
@@ -73,7 +73,7 @@ describeE2E("end-to-end: extension in real Chromium ↔ real MCP server", () => 
     const transport = new StdioClientTransport({
       command: "node",
       args: [serverEntry],
-      env: { ...process.env, BROWSERUSE_PORT: PORT, BROWSERUSE_TOKEN: TOKEN },
+      env: { ...process.env, CHROMANCHE_PORT: PORT, CHROMANCHE_TOKEN: TOKEN },
     });
     await client.connect(transport);
     mcpClient = client as unknown as typeof mcpClient;
@@ -115,12 +115,12 @@ describeE2E("end-to-end: extension in real Chromium ↔ real MCP server", () => 
     // The overlay is re-injected via tabs.onUpdated after navigation completes,
     // so it appears asynchronously — poll for it.
     await page.waitForFunction(
-      () => !!document.querySelector('div[data-browseruse="overlay"]'),
+      () => !!document.querySelector('div[data-chromanche="overlay"]'),
       undefined,
       { timeout: 10_000 },
     );
     const hasOverlay = await page.evaluate(
-      () => !!document.querySelector('div[data-browseruse="overlay"]')
+      () => !!document.querySelector('div[data-chromanche="overlay"]')
     );
     expect(hasOverlay).toBe(true);
   }, 30_000);

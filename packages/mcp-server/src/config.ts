@@ -1,7 +1,7 @@
 import { mkdirSync, openSync, writeSync, closeSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import { derivePairing, getTimezone } from "@browseruse/shared";
+import { derivePairing, getTimezone } from "@chromanche/shared";
 
 export interface Config {
   port: number;
@@ -16,7 +16,7 @@ function parsePort(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 1 || n > 65535) {
-    throw new Error(`BROWSERUSE_PORT is not a valid TCP port: ${raw}`);
+    throw new Error(`CHROMANCHE_PORT is not a valid TCP port: ${raw}`);
   }
   return n;
 }
@@ -24,7 +24,7 @@ function parsePort(raw: string | undefined): number | undefined {
 function parsePositiveMs(raw: string | undefined, fallback: number): number {
   const n = raw === undefined ? fallback : Number(raw);
   if (!Number.isFinite(n) || n <= 0) {
-    throw new Error(`BROWSERUSE_TIMEOUT_MS is not a positive number: ${raw}`);
+    throw new Error(`CHROMANCHE_TIMEOUT_MS is not a positive number: ${raw}`);
   }
   return n;
 }
@@ -36,15 +36,15 @@ function parsePositiveMs(raw: string | undefined, fallback: number): number {
  */
 export async function loadConfig(): Promise<Config> {
   const derived = await derivePairing({ timezone: getTimezone(), platform: platform() });
-  const port = parsePort(process.env.BROWSERUSE_PORT) ?? derived.port;
-  const timeoutMs = parsePositiveMs(process.env.BROWSERUSE_TIMEOUT_MS, 20000);
-  const envToken = process.env.BROWSERUSE_TOKEN;
+  const port = parsePort(process.env.CHROMANCHE_PORT) ?? derived.port;
+  const timeoutMs = parsePositiveMs(process.env.CHROMANCHE_TIMEOUT_MS, 20000);
+  const envToken = process.env.CHROMANCHE_TOKEN;
   const token = envToken ?? derived.token;
   const isDerived = !envToken;
 
   // Persist the token to disk so operators can inspect/override with an editor
   // even in derived mode. Mode 0o600 atomically (no world-readable window).
-  const dir = join(homedir(), ".browseruse");
+  const dir = join(homedir(), ".chromanche");
   mkdirSync(dir, { recursive: true });
   const tokenFile = join(dir, "token");
   const fd = openSync(tokenFile, "w", 0o600);

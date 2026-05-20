@@ -13,7 +13,7 @@ import {
   PageDragParamsSchema,
   PageFocusParamsSchema,
   PageClickXyParamsSchema,
-} from "@browseruse/shared";
+} from "@chromanche/shared";
 import { resolveUid } from "../lib/snapshot-manager.js";
 import { takeA11ySnapshot } from "./page-read.js";
 

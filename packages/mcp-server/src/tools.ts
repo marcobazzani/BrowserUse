@@ -25,7 +25,7 @@ import {
   ConsoleReadParamsSchema,
   NetworkReadParamsSchema,
   ProfilesListParamsSchema,
-} from "@browseruse/shared";
+} from "@chromanche/shared";
 import type { BridgeServer } from "./bridge.js";
 
 type ToolContent =
@@ -60,7 +60,7 @@ export const PageBatchStepSchema = z.object({
 }).strict();
 
 /**
- * Run several BrowserUse tools sequentially in one MCP round-trip. Eliminates
+ * Run several Chromanche tools sequentially in one MCP round-trip. Eliminates
  * per-step model-loop latency for known sequences (click → type → screenshot,
  * fill several fields, navigate then snapshot). Steps run in order; the first
  * failing step aborts by default. stopOnError=false runs every step and
@@ -72,7 +72,7 @@ export const PageBatchParamsSchema = z.object({
 }).strict();
 
 const PROFILE_FIELD = z.string().min(1).optional()
-  .describe("Target a specific Chrome profile (from browseruse_list_profiles). Omit if only one profile is connected.");
+  .describe("Target a specific Chrome profile (from chromanche_list_profiles). Omit if only one profile is connected.");
 
 /**
  * Add an optional top-level `profile` field to a schema for Claude Code's tool
@@ -102,7 +102,7 @@ function text(value: unknown): ToolResult {
 function guard(bridge: Pick<BridgeServer, "isConnected">) {
   if (!bridge.isConnected()) {
     throw new Error(
-      "no extension connected — install and enable the BrowserUse Chrome extension on at least one Chrome profile",
+      "no extension connected — install and enable the Chromanche Chrome extension on at least one Chrome profile",
     );
   }
 }
@@ -155,9 +155,9 @@ export function buildTools(bridge: BridgeServer) {
     claimed.add(key);
   }
 
-  const browseruse_list_profiles: Tool<Record<string, never>> = {
+  const chromanche_list_profiles: Tool<Record<string, never>> = {
     description:
-      "List the BrowserUse Chrome extensions currently connected to this MCP server. Each entry has {tag, label, connectedAt}. Call this first when more than one profile may be available; pass the chosen tag as `profile` in subsequent tool calls.",
+      "List the Chromanche Chrome extensions currently connected to this MCP server. Each entry has {tag, label, connectedAt}. Call this first when more than one profile may be available; pass the chosen tag as `profile` in subsequent tool calls.",
     inputSchema: ProfilesListParamsSchema,
     handler: async () => {
       return text(bridge.listProfiles());
@@ -511,7 +511,7 @@ export function buildTools(bridge: BridgeServer) {
 
   const page_batch: Tool<z.infer<ReturnType<typeof withProfile<typeof PageBatchParamsSchema>>>> = {
     description:
-      "Run several BrowserUse tools sequentially in a single MCP round-trip. " +
+      "Run several Chromanche tools sequentially in a single MCP round-trip. " +
       "Use this when you have a known sequence of actions (click → type → screenshot, " +
       "fill several fields, navigate then snapshot, write a whole row in Excel) — it " +
       "eliminates the per-step model loop latency. Steps run in order; by default the " +
@@ -574,7 +574,7 @@ export function buildTools(bridge: BridgeServer) {
   };
 
   return {
-    browseruse_list_profiles,
+    chromanche_list_profiles,
     tabs_list, tabs_create, tabs_close, tabs_activate,
     page_navigate, page_snapshot, page_screenshot,
     page_click, page_click_xy, page_type, page_scroll,

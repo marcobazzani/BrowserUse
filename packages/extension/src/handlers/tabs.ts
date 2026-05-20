@@ -1,5 +1,5 @@
 import type { Dispatcher } from "../dispatcher.js";
-import { TabsCreateParamsSchema, TabsCloseParamsSchema, TabsActivateParamsSchema } from "@browseruse/shared";
+import { TabsCreateParamsSchema, TabsCloseParamsSchema, TabsActivateParamsSchema } from "@chromanche/shared";
 
 export function registerTabHandlers(d: Dispatcher) {
   d.register("tabs.list", async () => {
