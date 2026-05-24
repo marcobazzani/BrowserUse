@@ -98,6 +98,7 @@ export const PageSnapshotParamsSchema = z
     tabId: z.number().int().optional(),
     mode: z.enum(["text", "dom", "a11y"]).default("a11y"),
     maxBytes: z.number().int().positive().max(2_000_000).default(80_000),
+    includeBounds: z.boolean().default(false),
   })
   .strict();
 export const PageSnapshotResultSchema = z
@@ -118,7 +119,17 @@ export const PageScreenshotParamsSchema = z
   })
   .strict();
 export const PageScreenshotResultSchema = z
-  .object({ format: z.enum(["png", "jpeg"]), base64: z.string() })
+  .object({
+    format: z.enum(["png", "jpeg"]),
+    base64: z.string(),
+    viewport: z.object({
+      width: z.number(),
+      height: z.number(),
+      devicePixelRatio: z.number(),
+      scrollX: z.number(),
+      scrollY: z.number(),
+    }).optional(),
+  })
   .strict();
 
 /* ---------- Interaction: click, type, scroll (uid OR selector) ---------- */
@@ -159,6 +170,7 @@ export const PageTypeParamsSchema = z
     text: z.string(),
     submit: z.boolean().default(false),
     clear: z.boolean().default(true),
+    requireEmpty: z.boolean().default(false),
     includeSnapshot: z.boolean().default(false),
   })
   .strict();
@@ -229,6 +241,7 @@ export const PageClickXyParamsSchema = z
     x: z.number().min(0),
     y: z.number().min(0),
     button: z.enum(["left", "right", "middle"]).default("left"),
+    clickCount: z.number().int().min(1).max(3).default(1),
     includeSnapshot: z.boolean().default(false),
   })
   .strict();
@@ -292,6 +305,45 @@ export const PagePressKeyParamsSchema = z
 export const PagePressKeyResultSchema = z.object({
   ok: z.literal(true),
   snapshot: z.string().optional(),
+}).strict();
+
+/* ---------- Focus state ---------- */
+
+export const PageFocusStateParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+  })
+  .strict();
+export const PageFocusStateResultSchema = z.object({
+  ok: z.literal(true),
+  targetId: z.string().optional(),
+  url: z.string(),
+  title: z.string(),
+  documentHasFocus: z.boolean(),
+  activeTag: z.string(),
+  activeRole: z.string().nullable().optional(),
+  activeName: z.string().optional(),
+  activeValue: z.string().optional(),
+  activeText: z.string().optional(),
+  selectedText: z.string().optional(),
+  selectionStart: z.number().nullable().optional(),
+  selectionEnd: z.number().nullable().optional(),
+  activeDescendant: z.string().optional(),
+  activeDescendantTag: z.string().optional(),
+  activeDescendantRole: z.string().nullable().optional(),
+  activeDescendantName: z.string().optional(),
+  activeDescendantValue: z.string().optional(),
+  activeDescendantText: z.string().optional(),
+  activeDescendantRowIndex: z.string().optional(),
+  activeDescendantColIndex: z.string().optional(),
+  activeDescendantBounds: z.object({
+    x: z.number(),
+    y: z.number(),
+    width: z.number(),
+    height: z.number(),
+  }).optional(),
+  ariaRowIndex: z.string().optional(),
+  ariaColIndex: z.string().optional(),
 }).strict();
 
 /* ---------- Fill form (batch) ---------- */
@@ -513,6 +565,7 @@ export const METHODS = {
   "page.focus":      { params: PageFocusParamsSchema,      result: PageFocusResultSchema },
   "page.clickXy":    { params: PageClickXyParamsSchema,    result: PageClickXyResultSchema },
   "page.pressKey":   { params: PagePressKeyParamsSchema,   result: PagePressKeyResultSchema },
+  "page.focusState": { params: PageFocusStateParamsSchema, result: PageFocusStateResultSchema },
   "page.fillForm":   { params: PageFillFormParamsSchema,   result: PageFillFormResultSchema },
   "page.handleDialog": { params: PageHandleDialogParamsSchema, result: PageHandleDialogResultSchema },
   "page.select":     { params: PageSelectParamsSchema,     result: PageSelectResultSchema },

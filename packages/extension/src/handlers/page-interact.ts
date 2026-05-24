@@ -13,6 +13,7 @@ import {
   PageDragParamsSchema,
   PageFocusParamsSchema,
   PageClickXyParamsSchema,
+  PageFocusStateParamsSchema,
 } from "@chromanche/shared";
 import { resolveUid } from "../lib/snapshot-manager.js";
 import { takeA11ySnapshot } from "./page-read.js";
@@ -301,6 +302,18 @@ const KEY_DEFS: Record<string, { key: string; code: string; keyCode: number; tex
   PageUp:     { key: "PageUp",    code: "PageUp",      keyCode: 33 },
   PageDown:   { key: "PageDown",  code: "PageDown",    keyCode: 34 },
   Space:      { key: " ",         code: "Space",       keyCode: 32, text: " " },
+  F1:         { key: "F1",        code: "F1",          keyCode: 112 },
+  F2:         { key: "F2",        code: "F2",          keyCode: 113 },
+  F3:         { key: "F3",        code: "F3",          keyCode: 114 },
+  F4:         { key: "F4",        code: "F4",          keyCode: 115 },
+  F5:         { key: "F5",        code: "F5",          keyCode: 116 },
+  F6:         { key: "F6",        code: "F6",          keyCode: 117 },
+  F7:         { key: "F7",        code: "F7",          keyCode: 118 },
+  F8:         { key: "F8",        code: "F8",          keyCode: 119 },
+  F9:         { key: "F9",        code: "F9",          keyCode: 120 },
+  F10:        { key: "F10",       code: "F10",         keyCode: 121 },
+  F11:        { key: "F11",       code: "F11",         keyCode: 122 },
+  F12:        { key: "F12",       code: "F12",         keyCode: 123 },
 };
 
 function resolveKey(key: string) {
@@ -356,6 +369,206 @@ async function dispatchKey(
     nativeVirtualKeyCode: kd.keyCode,
     modifiers,
   }, targetId);
+}
+
+async function documentHasFocus(
+  mgr: DebuggerManager,
+  tabId: number,
+  targetId?: string,
+): Promise<boolean> {
+  try {
+    const r = await mgr.sendCommand<{ result: { value?: boolean } }>(
+      tabId,
+      "Runtime.evaluate",
+      { expression: "document.hasFocus()", returnByValue: true },
+      targetId,
+    );
+    return r.result.value === true;
+  } catch {
+    return false;
+  }
+}
+
+function frameDepth(targetId: string, parents: Map<string, string | undefined>): number {
+  let depth = 0;
+  let cur: string | undefined = targetId;
+  while (cur) {
+    depth++;
+    cur = parents.get(cur);
+  }
+  return depth;
+}
+
+/**
+ * Dispatch at the page's actual focused document. Virtualized editors often
+ * keep their active surface inside an OOPIF; sending arrows/Tab/Enter only
+ * to the top tab session can miss the frame that owns focus.
+ */
+async function focusedKeyboardTarget(
+  mgr: DebuggerManager,
+  tabId: number,
+): Promise<string | undefined> {
+  await mgr.syncFrameTargets(tabId);
+  const frames = mgr.getFrameTargets(tabId);
+  const parents = new Map(frames.map((f) => [f.targetId, f.parentTargetId]));
+  const deepestFirst = [...frames]
+    .sort((a, b) => frameDepth(b.targetId, parents) - frameDepth(a.targetId, parents));
+
+  for (const frame of deepestFirst) {
+    if (await documentHasFocus(mgr, tabId, frame.targetId)) {
+      return frame.targetId;
+    }
+  }
+
+  return undefined;
+}
+
+async function dispatchKeyAtCurrentFocus(
+  mgr: DebuggerManager,
+  tabId: number,
+  kd: { key: string; code: string; keyCode: number; text?: string },
+  modifiers: number,
+): Promise<void> {
+  await dispatchKey(mgr, tabId, kd, modifiers, await focusedKeyboardTarget(mgr, tabId));
+}
+
+interface FocusState {
+  ok: true;
+  targetId?: string;
+  url: string;
+  title: string;
+  documentHasFocus: boolean;
+  activeTag: string;
+  activeRole?: string | null;
+  activeName?: string;
+  activeValue?: string;
+  activeText?: string;
+  selectedText?: string;
+  selectionStart?: number | null;
+  selectionEnd?: number | null;
+  activeDescendant?: string;
+  activeDescendantTag?: string;
+  activeDescendantRole?: string | null;
+  activeDescendantName?: string;
+  activeDescendantValue?: string;
+  activeDescendantText?: string;
+  activeDescendantRowIndex?: string;
+  activeDescendantColIndex?: string;
+  activeDescendantBounds?: { x: number; y: number; width: number; height: number };
+  ariaRowIndex?: string;
+  ariaColIndex?: string;
+}
+
+async function readFocusState(
+  mgr: DebuggerManager,
+  tabId: number,
+  targetId?: string,
+): Promise<FocusState> {
+  const r = await mgr.sendCommand<{ result: { value: Omit<FocusState, "ok" | "targetId"> } }>(
+    tabId,
+    "Runtime.evaluate",
+    {
+      expression: `(() => {
+        const doc = document;
+        const active = doc.activeElement;
+        const readAttr = (el, name) => el && el.getAttribute ? el.getAttribute(name) || undefined : undefined;
+        const accessibleName = (el) => el ? (
+          readAttr(el, "aria-label") ||
+          readAttr(el, "placeholder") ||
+          readAttr(el, "name") ||
+          readAttr(el, "title") ||
+          (el.textContent || "").trim().slice(0, 200) ||
+          undefined
+        ) : undefined;
+        const elementValue = (el) => el && "value" in el ? String(el.value ?? "") : undefined;
+        const elementText = (el, max = 500) => el ? (el.textContent || "").trim().slice(0, max) || undefined : undefined;
+        const bounds = (el) => {
+          if (!el || typeof el.getBoundingClientRect !== "function") return undefined;
+          const r = el.getBoundingClientRect();
+          if (!Number.isFinite(r.width) || !Number.isFinite(r.height)) return undefined;
+          return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+        };
+        const value = active && "value" in active ? String(active.value ?? "") : undefined;
+        const selectionStart = active && "selectionStart" in active ? active.selectionStart : undefined;
+        const selectionEnd = active && "selectionEnd" in active ? active.selectionEnd : undefined;
+        let selectedText = "";
+        if (typeof selectionStart === "number" && typeof selectionEnd === "number" && value !== undefined) {
+          selectedText = value.slice(selectionStart, selectionEnd);
+        } else {
+          selectedText = String(doc.getSelection ? doc.getSelection() || "" : "");
+        }
+        const activeDescendant = readAttr(active, "aria-activedescendant");
+        const descendant = activeDescendant ? doc.getElementById(activeDescendant) : null;
+        return {
+          url: location.href,
+          title: doc.title,
+          documentHasFocus: doc.hasFocus(),
+          activeTag: active && active.tagName ? active.tagName.toLowerCase() : "body",
+          activeRole: readAttr(active, "role") ?? null,
+          activeName: accessibleName(active),
+          activeValue: elementValue(active),
+          activeText: elementText(active),
+          selectedText: selectedText || undefined,
+          selectionStart: selectionStart ?? undefined,
+          selectionEnd: selectionEnd ?? undefined,
+          activeDescendant,
+          activeDescendantTag: descendant && descendant.tagName ? descendant.tagName.toLowerCase() : undefined,
+          activeDescendantRole: readAttr(descendant, "role") ?? undefined,
+          activeDescendantName: accessibleName(descendant),
+          activeDescendantValue: elementValue(descendant),
+          activeDescendantText: elementText(descendant),
+          activeDescendantRowIndex: readAttr(descendant, "aria-rowindex"),
+          activeDescendantColIndex: readAttr(descendant, "aria-colindex"),
+          activeDescendantBounds: bounds(descendant),
+          ariaRowIndex: readAttr(active, "aria-rowindex"),
+          ariaColIndex: readAttr(active, "aria-colindex"),
+        };
+      })()`,
+      returnByValue: true,
+    },
+    targetId,
+  );
+  return { ok: true, targetId, ...r.result.value };
+}
+
+function firstNonEmptyText(state: FocusState): { source: string; text: string } | undefined {
+  const candidates: Array<[string, string | undefined]> = state.activeDescendant
+    ? [
+        ["activeDescendantValue", state.activeDescendantValue],
+        ["activeDescendantText", state.activeDescendantText],
+        ["activeValue", state.activeValue],
+        ["selectedText", state.selectedText],
+      ]
+    : [
+        ["activeValue", state.activeValue],
+        ["activeText", state.activeText],
+        ["selectedText", state.selectedText],
+      ];
+
+  for (const [source, text] of candidates) {
+    const trimmed = text?.trim();
+    if (trimmed) return { source, text: trimmed };
+  }
+  return undefined;
+}
+
+async function assertEmptyFocusTarget(
+  mgr: DebuggerManager,
+  tabId: number,
+  targetId?: string,
+): Promise<void> {
+  const state = await readFocusState(mgr, tabId, targetId);
+  const existing = firstNonEmptyText(state);
+  if (!existing) return;
+  const location = state.activeDescendant
+    ? `active descendant ${state.activeDescendant}` +
+      `${state.activeDescendantRowIndex ? ` row=${state.activeDescendantRowIndex}` : ""}` +
+      `${state.activeDescendantColIndex ? ` col=${state.activeDescendantColIndex}` : ""}`
+    : `active <${state.activeTag} role="${state.activeRole ?? ""}">`;
+  throw new Error(
+    `page.type requireEmpty refused to type because ${location} already has ${existing.source}="${existing.text.slice(0, 120)}". ` +
+    `Use page_focus_state/page_screenshot to verify the target, then clear or choose another cell before typing.`,
+  );
 }
 
 /**
@@ -442,12 +655,14 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     const p = PageClickXyParamsSchema.parse(raw);
     const btn = p.button === "right" ? 2 : p.button === "middle" ? 1 : 0;
     const btnName = p.button === "right" ? "right" : p.button === "middle" ? "middle" : "left";
-    await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
-      type: "mousePressed", x: p.x, y: p.y, button: btnName, buttons: 1 << btn, clickCount: 1,
-    });
-    await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
-      type: "mouseReleased", x: p.x, y: p.y, button: btnName, buttons: 0, clickCount: 1,
-    });
+    for (let i = 1; i <= p.clickCount; i++) {
+      await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
+        type: "mousePressed", x: p.x, y: p.y, button: btnName, buttons: 1 << btn, clickCount: i,
+      });
+      await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
+        type: "mouseReleased", x: p.x, y: p.y, button: btnName, buttons: 0, clickCount: i,
+      });
+    }
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, snapshot };
   });
@@ -461,8 +676,10 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     // a virtual-canvas cell after page_click_xy lands focus there.
     if (!p.uid && !p.selector) {
       try {
+        const targetId = await focusedKeyboardTarget(mgr, p.tabId);
+        if (p.requireEmpty) await assertEmptyFocusTarget(mgr, p.tabId, targetId);
         for (const ch of p.text) {
-          await dispatchKey(mgr, p.tabId, charToKeyDef(ch), 0);
+          await dispatchKey(mgr, p.tabId, charToKeyDef(ch), 0, targetId);
         }
       } catch (e) {
         throw translateCdpError(e);
@@ -506,6 +723,8 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
         `Try page.focus(uid, mode: "blur+click") or use an app-specific anchor.`,
       );
     }
+
+    if (p.requireEmpty) await assertEmptyFocusTarget(mgr, p.tabId, el.targetId);
 
     if (p.clear && !usedFallback) {
       await mgr.sendCommand(p.tabId, "Runtime.callFunctionOn", {
@@ -615,9 +834,14 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
 
   d.register("page.pressKey", async (raw) => {
     const p = PagePressKeyParamsSchema.parse(raw);
-    await dispatchKey(mgr, p.tabId, resolveKey(p.key), modifierFlags(p.modifiers));
+    await dispatchKeyAtCurrentFocus(mgr, p.tabId, resolveKey(p.key), modifierFlags(p.modifiers));
     const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
     return { ok: true as const, snapshot };
+  });
+
+  d.register("page.focusState", async (raw) => {
+    const p = PageFocusStateParamsSchema.parse(raw);
+    return readFocusState(mgr, p.tabId, await focusedKeyboardTarget(mgr, p.tabId));
   });
 
   d.register("page.fillForm", async (raw) => {

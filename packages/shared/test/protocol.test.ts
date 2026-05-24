@@ -8,6 +8,7 @@ import {
   PageNavigateParamsSchema,
   PageSnapshotParamsSchema,
   PageScreenshotParamsSchema,
+  PageScreenshotResultSchema,
   SessionClaimResultSchema,
   PageClickParamsSchema,
   PageTypeParamsSchema,
@@ -17,6 +18,8 @@ import {
   PageFocusResultSchema,
   PageClickXyParamsSchema,
   PagePressKeyParamsSchema,
+  PageFocusStateParamsSchema,
+  PageFocusStateResultSchema,
   PageFillFormParamsSchema,
   PageHandleDialogParamsSchema,
   PageSelectParamsSchema,
@@ -103,6 +106,7 @@ describe("protocol round-trip", () => {
     const parsed = PageSnapshotParamsSchema.parse({ tabId: 1 });
     expect(parsed.mode).toBe("a11y");
     expect(parsed.maxBytes).toBe(80_000);
+    expect(parsed.includeBounds).toBe(false);
   });
 
   it("page.snapshot params accept no tabId (active-tab fallback)", () => {
@@ -119,6 +123,15 @@ describe("protocol round-trip", () => {
   it("page.screenshot params accept no tabId (active-tab fallback)", () => {
     const parsed = PageScreenshotParamsSchema.parse({});
     expect(parsed.tabId).toBeUndefined();
+  });
+
+  it("page.screenshot result accepts viewport metadata", () => {
+    const parsed = PageScreenshotResultSchema.parse({
+      format: "jpeg",
+      base64: "AAAA",
+      viewport: { width: 1280, height: 720, devicePixelRatio: 2, scrollX: 10, scrollY: 20 },
+    });
+    expect(parsed.viewport?.width).toBe(1280);
   });
 
   // --- click: uid OR selector ---
@@ -162,6 +175,7 @@ describe("protocol round-trip", () => {
     const p = PageTypeParamsSchema.parse({ tabId: 1, uid: "e1", text: "hi" });
     expect(p.submit).toBe(false);
     expect(p.clear).toBe(true);
+    expect(p.requireEmpty).toBe(false);
     expect(p.includeSnapshot).toBe(false);
   });
 
@@ -221,6 +235,7 @@ describe("protocol round-trip", () => {
     expect(p.x).toBe(45);
     expect(p.y).toBe(107);
     expect(p.button).toBe("left");
+    expect(p.clickCount).toBe(1);
   });
   it("page.clickXy rejects negative coordinates", () => {
     expect(() => PageClickXyParamsSchema.parse({ tabId: 1, x: -1, y: 0 })).toThrow();
@@ -228,6 +243,10 @@ describe("protocol round-trip", () => {
   it("page.clickXy accepts middle/right button", () => {
     const r = PageClickXyParamsSchema.parse({ tabId: 1, x: 5, y: 5, button: "right" });
     expect(r.button).toBe("right");
+  });
+  it("page.clickXy accepts double-click", () => {
+    const p = PageClickXyParamsSchema.parse({ tabId: 1, x: 5, y: 5, clickCount: 2 });
+    expect(p.clickCount).toBe(2);
   });
 
   it("page.focus result round-trips with focused=false + actual fields", () => {
@@ -256,6 +275,32 @@ describe("protocol round-trip", () => {
   });
   it("page.pressKey rejects invalid modifier", () => {
     expect(() => PagePressKeyParamsSchema.parse({ tabId: 1, key: "a", modifiers: ["Hyper"] })).toThrow();
+  });
+
+  it("page.focusState validates params and result", () => {
+    const p = PageFocusStateParamsSchema.parse({ tabId: 1 });
+    expect(p.tabId).toBe(1);
+    const r = PageFocusStateResultSchema.parse({
+      ok: true,
+      targetId: "grid-frame",
+      url: "https://grid.example/",
+      title: "Grid",
+      documentHasFocus: true,
+      activeTag: "div",
+      activeRole: "gridcell",
+      activeName: "Row 3 Column 2",
+      activeText: "existing",
+      activeDescendant: "cell-r3-c2",
+      activeDescendantRole: "gridcell",
+      activeDescendantName: "B3",
+      activeDescendantText: "existing",
+      activeDescendantRowIndex: "3",
+      activeDescendantColIndex: "2",
+      activeDescendantBounds: { x: 120, y: 240, width: 80, height: 24 },
+      ariaRowIndex: "3",
+      ariaColIndex: "2",
+    });
+    expect(r.activeDescendantText).toBe("existing");
   });
 
   // --- fillForm ---

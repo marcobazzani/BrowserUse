@@ -21,7 +21,12 @@ function fakeChrome() {
     tabs: [{ id: 1, url: "https://a", title: "a", active: true, windowId: 1 }] as any[],
     groups: new Map<number, { title?: string; color?: string; tabs: number[] }>(),
     nextGroupId: 100,
-    debuggerState: { attached: new Set<number>(), commands: [] as any[] },
+    debuggerState: {
+      attached: new Set<number | string>(),
+      commands: [] as any[],
+      onEventListeners: [] as Array<(src: chrome.debugger.Debuggee, method: string, params: Record<string, unknown>) => void>,
+      focusedTargetId: undefined as string | undefined,
+    },
   };
   (globalThis as any).chrome = {
     tabs: {
@@ -63,6 +68,12 @@ function fakeChrome() {
       executeScript: vi.fn(async (opts: any) => {
         // For text/dom snapshot modes (injected function) and scroll.
         if (opts.func) {
+          if (opts.func.name === "viewportSnapshot") {
+            return [{ result: { width: 1280, height: 720, devicePixelRatio: 2, scrollX: 10, scrollY: 20 } }];
+          }
+          if (opts.args?.length === 5) {
+            return [{ result: { ok: true } }];
+          }
           return [{ result: { mode: "text", url: "https://a", title: "a", content: "hello", truncated: false } }];
         }
         return [{ result: { ok: true } }];
@@ -73,12 +84,49 @@ function fakeChrome() {
       setBadgeBackgroundColor: vi.fn(async (_p) => {}),
     },
     debugger: {
-      attach: vi.fn(async ({ tabId }: { tabId: number }) => { state.debuggerState.attached.add(tabId); }),
-      detach: vi.fn(async ({ tabId }: { tabId: number }) => { state.debuggerState.attached.delete(tabId); }),
-      sendCommand: vi.fn(async (_target: any, method: string, params: any) => {
-        state.debuggerState.commands.push({ method, params });
+      attach: vi.fn(async ({ tabId, targetId }: { tabId?: number; targetId?: string }) => {
+        state.debuggerState.attached.add(targetId ?? tabId!);
+      }),
+      detach: vi.fn(async ({ tabId, targetId }: { tabId?: number; targetId?: string }) => {
+        state.debuggerState.attached.delete(targetId ?? tabId!);
+      }),
+      sendCommand: vi.fn(async (target: any, method: string, params: any) => {
+        state.debuggerState.commands.push({ target, method, params });
         if (method === "Runtime.enable" || method === "Network.enable" || method === "Accessibility.enable" || method === "Page.enable") return {};
-        if (method === "Runtime.evaluate") return { result: { type: "string", value: "ok" } };
+        if (method === "Runtime.evaluate") {
+          if (params?.expression === "document.hasFocus()") {
+            return { result: { type: "boolean", value: target.targetId === state.debuggerState.focusedTargetId } };
+          }
+          if (typeof params?.expression === "string" && params.expression.includes("activeElement")) {
+            return {
+              result: {
+                type: "object",
+                value: {
+                  url: target.targetId ? "https://grid.example/" : "https://a",
+                  title: target.targetId ? "Grid" : "a",
+                  documentHasFocus: target.targetId === state.debuggerState.focusedTargetId,
+                  activeTag: "div",
+                  activeRole: "gridcell",
+                  activeName: "Row 3 Column 2",
+                  activeValue: undefined,
+                  activeText: "existing",
+                  selectedText: undefined,
+                  activeDescendant: "cell-r3-c2",
+                  activeDescendantTag: "div",
+                  activeDescendantRole: "gridcell",
+                  activeDescendantName: "B3",
+                  activeDescendantText: "existing",
+                  activeDescendantRowIndex: "3",
+                  activeDescendantColIndex: "2",
+                  activeDescendantBounds: { x: 120, y: 240, width: 80, height: 24 },
+                  ariaRowIndex: "3",
+                  ariaColIndex: "2",
+                },
+              },
+            };
+          }
+          return { result: { type: "string", value: "ok" } };
+        }
         if (method === "Runtime.callFunctionOn") {
           // page.select uses returnByValue to return the picked values array.
           if (params?.functionDeclaration?.includes("page.select target") || params?.functionDeclaration?.includes("picked")) {
@@ -111,7 +159,7 @@ function fakeChrome() {
         if (method === "Input.insertText") return {};
         return {};
       }),
-      onEvent: { addListener: vi.fn() },
+      onEvent: { addListener: vi.fn((listener) => state.debuggerState.onEventListeners.push(listener)) },
       onDetach: { addListener: vi.fn() },
     },
   };
@@ -128,6 +176,16 @@ describe("handlers", () => {
     registerHandlers(d);
   });
   afterEach(() => { delete (globalThis as any).chrome; });
+
+  async function attachFocusedFrame(targetId = "grid-frame") {
+    state.debuggerState.focusedTargetId = targetId;
+    for (const listener of state.debuggerState.onEventListeners) {
+      listener({ tabId: 1 }, "Target.attachedToTarget", {
+        targetInfo: { targetId, type: "iframe", url: "https://grid.example/" },
+      });
+    }
+    await Promise.resolve();
+  }
 
   it("tabs.list returns all tabs", async () => {
     const resp = await d.handle({ jsonrpc: "2.0", id: 1, method: "tabs.list" });
@@ -184,10 +242,25 @@ describe("handlers", () => {
     expect((resp.result as any).mode).toBe("text");
   });
 
+  it("page.snapshot a11y can include bounds for accessible grid positioning", async () => {
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 23, method: "page.snapshot",
+      params: { tabId: 1, includeBounds: true },
+    });
+    expect((resp.result as any).content).toContain("bbox=100,100,100,100");
+  });
+
   it("page.screenshot strips the data URL prefix and returns base64", async () => {
     const resp = await d.handle({ jsonrpc: "2.0", id: 22, method: "page.screenshot", params: { tabId: 1 } });
     expect((resp.result as any).base64).toBe("AAAA");
     expect((resp.result as any).format).toBe("jpeg");
+    expect((resp.result as any).viewport).toEqual({
+      width: 1280,
+      height: 720,
+      devicePixelRatio: 2,
+      scrollX: 10,
+      scrollY: 20,
+    });
   });
 
   it("page.snapshot with no tabId resolves to the active tab", async () => {
@@ -261,6 +334,18 @@ describe("handlers", () => {
     // Critical: no DOM.resolveNode / DOM.getBoxModel — clickXy bypasses element resolution.
     const dom = state.debuggerState.commands.filter((c: any) => /^DOM\./.test(c.method));
     expect(dom.length).toBe(0);
+  });
+
+  it("page.clickXy supports double-click at exact coordinates", async () => {
+    state.debuggerState.commands = [];
+    await d.handle({
+      jsonrpc: "2.0", id: 202, method: "page.clickXy",
+      params: { tabId: 1, x: 88, y: 144, clickCount: 2 },
+    });
+    const mouse = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchMouseEvent");
+    expect(mouse.length).toBe(4);
+    expect(mouse.map((c: any) => c.params.clickCount)).toEqual([1, 1, 2, 2]);
+    expect(mouse.every((c: any) => c.params.x === 88 && c.params.y === 144)).toBe(true);
   });
 
   // --- page.type (CDP-based) ---
@@ -520,6 +605,96 @@ describe("handlers", () => {
     expect(keyEvents[0].params.type).toBe("keyDown");
     expect(keyEvents[1].params.type).toBe("keyUp");
     expect(keyEvents[0].params.key).toBe("Enter");
+  });
+
+  it("page.pressKey maps function keys to real virtual key codes", async () => {
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 103, method: "page.pressKey",
+      params: { tabId: 1, key: "F2" },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const keyDown = state.debuggerState.commands.find(
+      (c: any) => c.method === "Input.dispatchKeyEvent" && c.params.type === "keyDown",
+    );
+    expect(keyDown.params).toMatchObject({
+      key: "F2",
+      code: "F2",
+      windowsVirtualKeyCode: 113,
+      nativeVirtualKeyCode: 113,
+    });
+  });
+
+  it("page.pressKey dispatches to the focused OOPIF frame for virtual grid movement", async () => {
+    await attachFocusedFrame();
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 101, method: "page.pressKey",
+      params: { tabId: 1, key: "ArrowRight" },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const focusChecks = state.debuggerState.commands.filter(
+      (c: any) => c.method === "Runtime.evaluate" && c.params.expression === "document.hasFocus()",
+    );
+    expect(focusChecks.some((c: any) => c.target?.targetId === "grid-frame")).toBe(true);
+    const keyEvents = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchKeyEvent");
+    expect(keyEvents.length).toBe(2);
+    expect(keyEvents[0].target).toEqual({ targetId: "grid-frame" });
+    expect(keyEvents[0].params).toMatchObject({ type: "keyDown", key: "ArrowRight" });
+  });
+
+  it("page.type without uid dispatches text to the focused OOPIF frame", async () => {
+    await attachFocusedFrame();
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 102, method: "page.type",
+      params: { tabId: 1, text: "A1", clear: false },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const keyEvents = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchKeyEvent");
+    expect(keyEvents.length).toBe(4);
+    expect(keyEvents.every((c: any) => c.target?.targetId === "grid-frame")).toBe(true);
+    expect(keyEvents.filter((c: any) => c.params.type === "keyDown").map((c: any) => c.params.key)).toEqual(["A", "1"]);
+  });
+
+  it("page.type requireEmpty refuses to overwrite non-empty active descendants", async () => {
+    await attachFocusedFrame();
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 105, method: "page.type",
+      params: { tabId: 1, text: "replacement", requireEmpty: true },
+    });
+    expect(resp.error?.message).toMatch(/requireEmpty refused/i);
+    expect(resp.error?.message).toContain("cell-r3-c2");
+    expect(resp.error?.message).toContain("existing");
+    const keyEvents = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchKeyEvent");
+    expect(keyEvents.length).toBe(0);
+  });
+
+  it("page.focusState reports active element state from the focused OOPIF frame", async () => {
+    await attachFocusedFrame();
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 104, method: "page.focusState",
+      params: { tabId: 1 },
+    });
+    expect((resp.result as any)).toMatchObject({
+      ok: true,
+      targetId: "grid-frame",
+      documentHasFocus: true,
+      activeRole: "gridcell",
+      activeName: "Row 3 Column 2",
+      activeText: "existing",
+      activeDescendant: "cell-r3-c2",
+      activeDescendantRole: "gridcell",
+      activeDescendantName: "B3",
+      activeDescendantText: "existing",
+      activeDescendantRowIndex: "3",
+      activeDescendantColIndex: "2",
+      activeDescendantBounds: { x: 120, y: 240, width: 80, height: 24 },
+      ariaRowIndex: "3",
+      ariaColIndex: "2",
+    });
   });
 
   // --- page.fillForm ---

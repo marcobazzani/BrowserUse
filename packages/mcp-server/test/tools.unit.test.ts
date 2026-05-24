@@ -28,6 +28,7 @@ const fakeBridge = () => {
         if (method === "page.hover")      return { ok: true };
         if (method === "page.focus")      return { ok: true, focused: true, modeUsed: (params as any)?.mode === "auto" || !(params as any)?.mode ? "js" : (params as any).mode };
         if (method === "page.pressKey")   return { ok: true };
+        if (method === "page.focusState") return { ok: true, url: "https://grid.example/", title: "Grid", documentHasFocus: true, activeTag: "div", activeRole: "gridcell", activeName: "Row 3 Column 2" };
         if (method === "page.fillForm")   return { ok: true, filledCount: 2 };
         if (method === "page.handleDialog") return { ok: true, handled: true, dialogType: "alert", dialogMessage: "hi" };
         if (method === "page.select")     return { ok: true, selected: ["opt1"] };
@@ -198,6 +199,29 @@ describe("tool adapters", () => {
     expect(calls.map(c => c.method)).toEqual(["session.claim", "page.pressKey"]);
     expect((calls[1]!.params as any).key).toBe("Enter");
     expect((calls[1]!.params as any).modifiers).toEqual([]);
+  });
+
+  it("page_focus_state auto-claims and forwards tabId", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    const result = await tools.page_focus_state.handler({ tabId: 7 });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.focusState"]);
+    expect((calls[1]!.params as any).tabId).toBe(7);
+    expect(JSON.parse((result.content[0] as any).text).activeRole).toBe("gridcell");
+  });
+
+  it("page_focus_state is batchable so verification can follow movement", async () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    const r = await tools.page_batch.handler({
+      steps: [
+        { tool: "page_press_key", args: { tabId: 1, key: "ArrowDown" } },
+        { tool: "page_focus_state", args: { tabId: 1 } },
+      ],
+    });
+    const parsed = JSON.parse((r.content[0] as any).text);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.results.map((s: any) => s.tool)).toEqual(["page_press_key", "page_focus_state"]);
   });
 
   it("page_fill_form auto-claims and forwards fields", async () => {

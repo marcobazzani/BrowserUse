@@ -35,13 +35,25 @@ function domSnapshot(maxBytes: number) {
   };
 }
 
+function viewportSnapshot() {
+  return {
+    width: window.innerWidth,
+    height: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio || 1,
+    scrollX: window.scrollX,
+    scrollY: window.scrollY,
+  };
+}
+
 export function registerPageReadHandlers(d: Dispatcher, mgr: DebuggerManager) {
   d.register("page.snapshot", async (raw) => {
     const p = PageSnapshotParamsSchema.parse(raw);
     const tabId = await resolveTabId(p.tabId);
 
     if (p.mode === "a11y") {
-      const { content, truncated } = await captureA11ySnapshot(mgr, tabId, p.maxBytes);
+      const { content, truncated } = await captureA11ySnapshot(mgr, tabId, p.maxBytes, {
+        includeBounds: p.includeBounds,
+      });
       const tab = await chrome.tabs.get(tabId);
       return {
         mode: "a11y" as const,
@@ -70,6 +82,10 @@ export function registerPageReadHandlers(d: Dispatcher, mgr: DebuggerManager) {
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId!, opts);
     const comma = dataUrl.indexOf(",");
     const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
-    return { format: p.format, base64 };
+    const [{ result: viewport }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: viewportSnapshot,
+    }).catch(() => [{ result: undefined }] as Array<{ result: undefined }>);
+    return { format: p.format, base64, viewport };
   });
 }

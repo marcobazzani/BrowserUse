@@ -82,6 +82,10 @@ interface FrameSubtree {
   nodes: AXNode[];
 }
 
+interface SnapshotOptions {
+  includeBounds?: boolean;
+}
+
 function getProp(node: AXNode, propName: string): unknown {
   const p = node.properties?.find((x) => x.name === propName);
   return p?.value?.value;
@@ -104,6 +108,7 @@ export async function captureA11ySnapshot(
   mgr: DebuggerManager,
   tabId: number,
   maxBytes: number,
+  opts: SnapshotOptions = {},
 ): Promise<{ content: string; truncated: boolean }> {
   // Refresh OOPIF attachments — new iframes since the last snapshot
   // need to be discovered, and old ones cleaned up.
@@ -166,14 +171,36 @@ export async function captureA11ySnapshot(
   let totalLen = 0;
   let truncated = false;
 
-  function walkTree(nodes: AXNode[], rootDepth: number, targetId?: string): void {
+  async function nodeBoundsAttr(node: AXNode, targetId?: string): Promise<string | undefined> {
+    if (!opts.includeBounds || node.backendDOMNodeId === undefined) return undefined;
+    try {
+      const box = await mgr.sendCommand<{ model: { content: number[] } }>(
+        tabId,
+        "DOM.getBoxModel",
+        { backendNodeId: node.backendDOMNodeId },
+        targetId,
+      );
+      const q = box.model.content;
+      const xs = [q[0], q[2], q[4], q[6]];
+      const ys = [q[1], q[3], q[5], q[7]];
+      const left = Math.min(...xs);
+      const top = Math.min(...ys);
+      const right = Math.max(...xs);
+      const bottom = Math.max(...ys);
+      return `bbox=${Math.round(left)},${Math.round(top)},${Math.round(right - left)},${Math.round(bottom - top)}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async function walkTree(nodes: AXNode[], rootDepth: number, targetId?: string): Promise<void> {
     if (truncated) return;
     const nodeMap = new Map<string, AXNode>();
     for (const n of nodes) nodeMap.set(n.nodeId, n);
     const root = nodes.find((n) => !n.parentId) ?? nodes[0];
     if (!root) return;
 
-    function walk(nodeId: string, depth: number): void {
+    async function walk(nodeId: string, depth: number): Promise<void> {
       if (truncated) return;
       const node = nodeMap.get(nodeId);
       if (!node) return;
@@ -203,6 +230,8 @@ export async function captureA11ySnapshot(
         if (getProp(node, "readonly") === true) attrs.push("readonly");
         const val = getProp(node, "value");
         if (val !== undefined && val !== "") attrs.push(`value="${String(val).slice(0, 80)}"`);
+        const bbox = await nodeBoundsAttr(node, targetId);
+        if (bbox) attrs.push(bbox);
 
         const indent = "  ".repeat(depth);
         const nameStr = name ? ` "${name.slice(0, 100)}"` : "";
@@ -230,21 +259,21 @@ export async function captureA11ySnapshot(
         owners.has(node.backendDOMNodeId)
       ) {
         const sub = owners.get(node.backendDOMNodeId)!;
-        walkTree(sub.nodes, childrenDepth, sub.targetId);
+        await walkTree(sub.nodes, childrenDepth, sub.targetId);
         return;
       }
 
       const kids = node.childIds ?? [];
       for (const kid of kids) {
         if (truncated) break;
-        walk(kid, childrenDepth);
+        await walk(kid, childrenDepth);
       }
     }
 
-    walk(root.nodeId, rootDepth);
+    await walk(root.nodeId, rootDepth);
   }
 
-  walkTree(main.nodes, 0, undefined);
+  await walkTree(main.nodes, 0, undefined);
   tabUidMaps.set(tabId, uidMap);
 
   return { content: lines.join("\n"), truncated };
