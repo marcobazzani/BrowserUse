@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/marcobazzani/Chromanche/actions/workflows/ci.yml/badge.svg)](https://github.com/marcobazzani/Chromanche/actions/workflows/ci.yml)
 
-Lets Claude Code or Codex drive your real, logged-in Chrome via a local MCP server + MV3 extension. No browser data leaves your machine; the MCP server binds `127.0.0.1` only.
+Lets Claude Code, Codex, OpenCode, GitHub Copilot CLI, or another MCP-capable client drive your real, logged-in Chrome via a local MCP server + MV3 extension. No browser data leaves your machine; the MCP server binds `127.0.0.1` only.
 
 ## What you get
 
@@ -26,7 +26,7 @@ The default `page_snapshot` mode returns a **CDP accessibility tree with stable 
 
 **Zero-config pairing (v0.5.0+):** the MCP server and the extension both derive the same WebSocket port and auth token from `sha256(timezone + platform + salt)`. No copy-paste, no port config. Set `CHROMANCHE_TOKEN` / `CHROMANCHE_PORT` on the server and paste matching values into the extension popup's advanced section if you need to override.
 
-**Note on concurrent Claude Code sessions:** v0.6.0 supports N Chrome profiles per one Claude Code session. Multiple *concurrent* Claude Code sessions sharing one extension still require the forthcoming hub/proxy architecture (v0.7.0). Two sessions started at once will race on the derived port — the second fails with EADDRINUSE.
+**Note on concurrent MCP sessions:** one session becomes the local WebSocket leader; concurrent sessions that hit the same derived port join it through the built-in proxy path. This lets multiple MCP clients or client sessions share the same connected extension without manual port changes.
 
 Every interactive tool auto-claims its target tab: the tab is put into a distinct orange **"Claude"** tab group and gets an amber pulsing border + "Claude is using this tab" pill — so you always know when the agent is driving.
 
@@ -34,21 +34,21 @@ Every interactive tool auto-claims its target tab: the tab is put into a distinc
 
 - Node 20+
 - A Chromium-based browser (Chrome, Edge, Brave, Arc) — 116+
-- Claude Code, Codex, or any MCP-capable client
+- Claude Code, Codex, OpenCode, GitHub Copilot CLI, or another MCP-capable client
 
 ## Quickstart (users)
 
-One command — downloads the latest release, registers the MCP server with Claude Code and Codex when their CLIs are present, and prints the Chrome steps:
+One command — downloads the latest release, registers the MCP server with Claude Code, Codex, OpenCode, and GitHub Copilot CLI when their CLIs are present, and prints the Chrome steps:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/marcobazzani/Chromanche/main/scripts/install.sh | bash
 ```
 
-Then load the extension as unpacked. No token paste — pairing happens automatically the first time Claude Code launches the MCP server.
+Then load the extension as unpacked. No token paste — pairing happens automatically the first time your MCP client launches the server.
 
 **Windows:** use WSL for the installer, or do it by hand — download the latest `chromanche-extension-*.zip` + `chromanche-mcp-server-*.tgz` from [Releases](https://github.com/marcobazzani/Chromanche/releases), unpack to `%USERPROFILE%\.chromanche\`, then register the MCP server per the installer's printed instructions.
 
-**Uninstall:**
+**Uninstall:** removes Chromanche and legacy BrowserUse MCP registrations and installed files.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/marcobazzani/Chromanche/main/scripts/uninstall.sh | bash
 ```
