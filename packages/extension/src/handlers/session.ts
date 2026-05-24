@@ -1,21 +1,21 @@
 import type { Dispatcher } from "../dispatcher.js";
 import { SessionClaimParamsSchema, SessionReleaseParamsSchema } from "@chromanche/shared";
 
-let claudeGroupId: number | null = null;
+let agentGroupId: number | null = null;
 const claimed = new Set<number>();
 
 async function ensureGroup(tabId: number): Promise<number> {
-  if (claudeGroupId !== null) {
+  if (agentGroupId !== null) {
     try {
-      await chrome.tabs.group({ tabIds: [tabId], groupId: claudeGroupId });
-      return claudeGroupId;
+      await chrome.tabs.group({ tabIds: [tabId], groupId: agentGroupId });
+      return agentGroupId;
     } catch {
-      claudeGroupId = null;
+      agentGroupId = null;
     }
   }
   const gid = await chrome.tabs.group({ tabIds: [tabId] });
-  await chrome.tabGroups.update(gid, { title: "Claude", color: "orange", collapsed: false });
-  claudeGroupId = gid;
+  await chrome.tabGroups.update(gid, { title: "Agent", color: "orange", collapsed: false });
+  agentGroupId = gid;
   return gid;
 }
 
@@ -42,7 +42,7 @@ function overlayIn() {
     "}",
     "</style>",
     '<div class="frame"></div>',
-    '<div class="pill" title="This tab is being controlled by Claude">Claude is using this tab</div>',
+    '<div class="pill" title="This tab is being controlled by an agent">Agent is using this tab</div>',
   ].join("\n");
   document.documentElement.appendChild(host);
 }
@@ -57,7 +57,7 @@ async function injectOverlay(tabId: number) {
     await chrome.action.setBadgeText({ tabId, text: "" });
   } catch {
     // Overlay couldn't inject (chrome://, Web Store, strict CSP). Fall back
-    // to a toolbar-icon badge so the user still sees that Claude is driving.
+    // to a toolbar-icon badge so the user still sees that an agent is driving.
     await chrome.action.setBadgeBackgroundColor({ tabId, color: "#FF8C00" }).catch(() => {});
     await chrome.action.setBadgeText({ tabId, text: "●" }).catch(() => {});
   }

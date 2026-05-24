@@ -4,7 +4,7 @@
 
 ## What Chromanche does
 
-Chromanche is a Chrome MV3 extension that connects to a local-loopback WebSocket server (`ws://127.0.0.1:<port>`) run by a process on your own computer. That local process exposes an MCP (Model Context Protocol) server over stdio, which MCP-capable clients such as Claude Code can use to drive Chrome — open tabs, read page content, click, type, inspect logs.
+Chromanche is a Chrome MV3 extension that connects to a local-loopback WebSocket server (`ws://127.0.0.1:<port>`) run by a process on your own computer. That local process exposes an MCP (Model Context Protocol) server over stdio, which MCP-capable clients can use to drive Chrome — open tabs, read page content, click, type, inspect logs.
 
 ## What data Chromanche collects, transmits, or stores
 
@@ -15,7 +15,7 @@ Chromanche is a Chrome MV3 extension that connects to a local-loopback WebSocket
 
 ## Permissions explained
 
-- `tabs`, `tabGroups`, `activeTab` — read the list of your open tabs, create/close/activate them, and group the tabs the agent is driving under an orange "Claude" group so you can always see which tabs are being controlled.
+- `tabs`, `tabGroups`, `activeTab` — read the list of your open tabs, create/close/activate them, and group the tabs the agent is driving under an orange "Agent" group so you can always see which tabs are being controlled.
 - `scripting` — inject small pieces of JavaScript into a target tab to read the DOM, click elements, type into inputs, and draw the amber activity overlay.
 - `debugger` — attach Chrome's DevTools Protocol to a tab so the agent can evaluate JavaScript, read console messages, and see network activity. Chrome displays a warning banner ("Chromanche started debugging this browser") whenever this is active, so the user always has visibility.
 - `storage` — remember the local auth token, the configured port, and the connection status between popup openings.

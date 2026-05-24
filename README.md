@@ -1,4 +1,4 @@
-# Chromanche — self-hosted "Claude in Chrome"
+# Chromanche — self-hosted "Agent in Chrome"
 
 <p align="center">
   <img src="packages/extension/icons/icon-128.png" alt="Chromanche logo" width="128" height="128">
@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/marcobazzani/Chromanche/actions/workflows/ci.yml/badge.svg)](https://github.com/marcobazzani/Chromanche/actions/workflows/ci.yml)
 
-Lets Claude Code, Codex, OpenCode, GitHub Copilot CLI, or another MCP-capable client drive your real, logged-in Chrome via a local MCP server + MV3 extension. No browser data leaves your machine; the MCP server binds `127.0.0.1` only.
+Lets any MCP-capable coding agent drive your real, logged-in Chrome through a local MCP server + MV3 extension. Works with Claude Code, Codex, OpenCode, GitHub Copilot CLI, and other MCP clients. No browser data leaves your machine; the MCP server binds `127.0.0.1` only.
 
 ## What you get
 
@@ -28,7 +28,7 @@ The default `page_snapshot` mode returns a **CDP accessibility tree with stable 
 
 **Note on concurrent MCP sessions:** one session becomes the local WebSocket leader; concurrent sessions that hit the same derived port join it through the built-in proxy path. This lets multiple MCP clients or client sessions share the same connected extension without manual port changes.
 
-Every interactive tool auto-claims its target tab: the tab is put into a distinct orange **"Claude"** tab group and gets an amber pulsing border + "Claude is using this tab" pill — so you always know when the agent is driving.
+Every interactive tool auto-claims its target tab: the tab is put into a distinct orange **"Agent"** tab group and gets an amber pulsing border + "Agent is using this tab" pill — so you always know when an MCP client is driving.
 
 ## Requirements
 
@@ -38,7 +38,7 @@ Every interactive tool auto-claims its target tab: the tab is put into a distinc
 
 ## Quickstart (users)
 
-One command — downloads the latest release, registers the MCP server with Claude Code, Codex, OpenCode, and GitHub Copilot CLI when their CLIs are present, and prints the Chrome steps:
+One command — downloads the latest release, registers the MCP server with supported MCP clients when their CLIs are present, and prints the Chrome steps:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/marcobazzani/Chromanche/main/scripts/install.sh | bash

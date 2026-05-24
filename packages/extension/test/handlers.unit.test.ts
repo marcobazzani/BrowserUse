@@ -143,11 +143,11 @@ describe("handlers", () => {
     expect((resp.result as any).url).toBe("https://example.com");
   });
 
-  it("session.claim groups the tab under a Claude orange group", async () => {
+  it("session.claim groups the tab under an Agent orange group", async () => {
     const resp = await d.handle({ jsonrpc: "2.0", id: 3, method: "session.claim", params: { tabId: 1 } });
     expect((resp.result as any).ok).toBe(true);
     const gid = (resp.result as any).groupId;
-    expect(state.groups.get(gid)?.title).toBe("Claude");
+    expect(state.groups.get(gid)?.title).toBe("Agent");
     expect(state.groups.get(gid)?.color).toBe("orange");
   });
 
