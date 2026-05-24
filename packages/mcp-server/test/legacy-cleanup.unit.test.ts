@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 // Installer helper for editing MCP-client config JSON. Plain .mjs, no types —
 // vitest transpiles and runs it directly.
 // @ts-expect-error — no type declarations for the .mjs helper
-import { removeServer, addServer } from "../../../scripts/lib/mcp-config.mjs";
+import {
+  removeServer,
+  addServer,
+  removeCodexServerToml,
+  addCodexServerToml,
+} from "../../../scripts/lib/mcp-config.mjs";
 
 describe("mcp-config removeServer", () => {
   it("removes a server from mcpServers and keeps siblings", () => {
@@ -76,5 +81,66 @@ describe("mcp-config addServer", () => {
   it("creates a fresh object from null/undefined input", () => {
     expect(addServer(null, "mcp", "chromanche", entry))
       .toEqual({ mcp: { chromanche: entry } });
+  });
+});
+
+describe("mcp-config Codex TOML helpers", () => {
+  it("removes only the matching Codex MCP server table", () => {
+    const input = [
+      'model = "gpt-5"',
+      "",
+      "[mcp_servers.browseruse]",
+      'command = "node"',
+      'args = ["/old/index.cjs"]',
+      "",
+      "[mcp_servers.keepme]",
+      'command = "npx"',
+      'args = ["-y", "pkg"]',
+      "",
+      "[features]",
+      "memories = true",
+      "",
+    ].join("\n");
+
+    expect(removeCodexServerToml(input, "browseruse")).toBe([
+      'model = "gpt-5"',
+      "[mcp_servers.keepme]",
+      'command = "npx"',
+      'args = ["-y", "pkg"]',
+      "",
+      "[features]",
+      "memories = true",
+      "",
+    ].join("\n"));
+  });
+
+  it("adds or replaces a Codex MCP server table", () => {
+    const input = [
+      "[mcp_servers.chromanche]",
+      'command = "node"',
+      'args = ["/old/index.cjs"]',
+      "",
+      "[features]",
+      "memories = true",
+      "",
+    ].join("\n");
+
+    expect(addCodexServerToml(input, "chromanche", {
+      command: "node",
+      args: ["/new/index.cjs"],
+    })).toBe([
+      "[features]",
+      "memories = true",
+      "",
+      "[mcp_servers.chromanche]",
+      'command = "node"',
+      'args = ["/new/index.cjs"]',
+      "",
+    ].join("\n"));
+  });
+
+  it("quotes Codex MCP server names when TOML requires it", () => {
+    expect(addCodexServerToml("", "my server", { command: "node", args: ["/x"] }))
+      .toContain('[mcp_servers."my server"]');
   });
 });

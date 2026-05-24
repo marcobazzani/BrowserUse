@@ -16,6 +16,7 @@ LEGACY_DIR="${HOME}/.${LEGACY_NAME}"
 CLAUDE_CFG="${HOME}/.claude/settings.json"
 OPENCODE_CFG="${HOME}/.opencode/config.json"
 COPILOT_CFG="${HOME}/.copilot/mcp-config.json"
+CODEX_CFG="${HOME}/.codex/config.toml"
 
 _note() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
@@ -26,9 +27,10 @@ _has_legacy() {
      claude mcp list 2>/dev/null | grep -q "^${LEGACY_NAME}"; then
     return 0
   fi
-  for cfg in "$CLAUDE_CFG" "$OPENCODE_CFG" "$COPILOT_CFG"; do
+  for cfg in "$CLAUDE_CFG" "$OPENCODE_CFG" "$COPILOT_CFG" "$CODEX_CFG"; do
     [ -f "$cfg" ] && grep -q "\"${LEGACY_NAME}\"" "$cfg" && return 0
   done
+  [ -f "$CODEX_CFG" ] && grep -q "\[mcp_servers\.${LEGACY_NAME}\]" "$CODEX_CFG" && return 0
   return 1
 }
 
@@ -47,6 +49,12 @@ cleanup_legacy() {
   # OpenCode + GitHub Copilot CLI: drop the entry from their JSON configs.
   node "$MCP_CONFIG_TOOL" remove "$OPENCODE_CFG" "${LEGACY_NAME}" || true
   node "$MCP_CONFIG_TOOL" remove "$COPILOT_CFG" "${LEGACY_NAME}" || true
+
+  # Codex stores MCP servers in ~/.codex/config.toml.
+  if command -v codex >/dev/null 2>&1; then
+    codex mcp remove "${LEGACY_NAME}" >/dev/null 2>&1 || true
+  fi
+  node "$MCP_CONFIG_TOOL" remove-codex "$CODEX_CFG" "${LEGACY_NAME}" || true
 
   # Installed files.
   rm -rf "$LEGACY_DIR"

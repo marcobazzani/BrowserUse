@@ -19,6 +19,7 @@ let home: string;
 const claudeCfg = () => join(home, ".claude", "settings.json");
 const opencodeCfg = () => join(home, ".opencode", "config.json");
 const copilotCfg = () => join(home, ".copilot", "mcp-config.json");
+const codexCfg = () => join(home, ".codex", "config.toml");
 const readJson = (p: string) => JSON.parse(readFileSync(p, "utf8"));
 
 const writeJson = (dir: string, file: string, data: unknown) => {
@@ -53,6 +54,17 @@ describe("cleanup-legacy.sh", () => {
     writeJson(".copilot", "mcp-config.json", {
       mcpServers: { browseruse: { type: "stdio" }, keepme: { type: "stdio" } },
     });
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(codexCfg(), [
+      "[mcp_servers.browseruse]",
+      'command = "node"',
+      'args = ["/old/index.cjs"]',
+      "",
+      "[mcp_servers.keepme]",
+      'command = "npx"',
+      'args = ["-y", "pkg"]',
+      "",
+    ].join("\n"));
 
     run();
 
@@ -60,6 +72,12 @@ describe("cleanup-legacy.sh", () => {
     expect(readJson(claudeCfg()).mcpServers).toEqual({ keepme: { command: "x" } });
     expect(readJson(opencodeCfg()).mcp).toEqual({ keepme: { type: "local" } });
     expect(readJson(copilotCfg()).mcpServers).toEqual({ keepme: { type: "stdio" } });
+    expect(readFileSync(codexCfg(), "utf8")).toBe([
+      "[mcp_servers.keepme]",
+      'command = "npx"',
+      'args = ["-y", "pkg"]',
+      "",
+    ].join("\n"));
   });
 
   it("is a no-op when there is no legacy install", () => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Chromanche installer — downloads a release and registers the MCP server
-# with Claude Code (and OpenCode / GitHub Copilot CLI when present).
+# with Claude Code, Codex (and OpenCode / GitHub Copilot CLI when present).
 # Pairing is automatic: the extension and the MCP server derive the same
 # token+port from your timezone + OS on each start. No copy-paste, no port
 # config.
@@ -188,6 +188,28 @@ EOF
   fi
 fi
 
+# --- Register with Codex ----------------------------------------------------
+CODEX_STATUS="skip"
+if command -v codex >/dev/null 2>&1; then
+  _note "Registering MCP server with Codex as '${MCP_NAME}'..."
+  if codex mcp list 2>/dev/null | grep -q "^${MCP_NAME}[[:space:]]"; then
+    _note "Existing '${MCP_NAME}' Codex MCP entry found — removing and re-adding."
+    codex mcp remove "${MCP_NAME}" >/dev/null 2>&1 || true
+  fi
+  codex mcp add "${MCP_NAME}" -- node "$ENTRY"
+  CODEX_STATUS="registered"
+else
+  _warn "'codex' CLI not found on PATH. Add this manually to ~/.codex/config.toml:"
+  cat <<EOF
+
+[mcp_servers.${MCP_NAME}]
+command = "node"
+args = ["${ENTRY}"]
+
+EOF
+  CODEX_STATUS="manual"
+fi
+
 # --- Register with GitHub Copilot CLI ---------------------------------------
 GH_CFG="${HOME}/.copilot/mcp-config.json"
 COPILOT_STATUS="skip"
@@ -249,7 +271,7 @@ cat <<EOF
   3. Click "Load unpacked" and select:
        ${EXT_DIR}
   4. Pin the Chromanche toolbar icon (puzzle-piece menu → pin)
-  5. Start Claude Code, OpenCode, or GitHub Copilot CLI and try:
+  5. Start Claude Code, Codex, OpenCode, or GitHub Copilot CLI and try:
        "open https://example.com in a new tab and tell me the title"
 
   Pairing is automatic — the extension and MCP server derive a matching
@@ -265,6 +287,9 @@ if [ "$CLAUDE_STATUS" = "manual" ]; then
 fi
 if [ "$OPENCODE_STATUS" = "manual" ]; then
   _warn "You still need to add the MCP server entry to ${OC_CFG} (see above)."
+fi
+if [ "$CODEX_STATUS" = "manual" ]; then
+  _warn "You still need to add the MCP server entry to ~/.codex/config.toml (see above)."
 fi
 if [ "$COPILOT_STATUS" = "manual" ]; then
   _warn "You still need to add the MCP server entry to ${GH_CFG} (see above)."
