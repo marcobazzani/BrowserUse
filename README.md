@@ -1,12 +1,16 @@
 # Chromanche — self-hosted "Claude in Chrome"
 
+<p align="center">
+  <img src="packages/extension/icons/icon-128.png" alt="Chromanche logo" width="128" height="128">
+</p>
+
 [![CI](https://github.com/marcobazzani/Chromanche/actions/workflows/ci.yml/badge.svg)](https://github.com/marcobazzani/Chromanche/actions/workflows/ci.yml)
 
 Lets Claude Code or Codex drive your real, logged-in Chrome via a local MCP server + MV3 extension. No browser data leaves your machine; the MCP server binds `127.0.0.1` only.
 
 ## What you get
 
-MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket. Current set (v0.9.0, 26 tools):
+MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket. Current set (v0.10.0, 26 tools):
 
 - **Tabs:** `tabs_list`, `tabs_create`, `tabs_close`, `tabs_activate`
 - **Navigation & read:** `page_navigate`, `page_snapshot` (uid-annotated a11y tree / text / dom), `page_screenshot` (returns MCP image content for vision-driven flows)
