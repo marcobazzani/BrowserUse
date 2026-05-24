@@ -82,8 +82,19 @@ fi
 # Explicit override always wins.
 TAG="${CHROMANCHE_TAG:-$TAG}"
 
-EXT_URL="https://github.com/${REPO}/releases/download/${TAG}/chromanche-extension-${TAG}.zip"
-SRV_URL="https://github.com/${REPO}/releases/download/${TAG}/chromanche-mcp-server-${TAG}.tgz"
+ASSET_BASE="https://github.com/${REPO}/releases/download/${TAG}"
+EXT_URL="${ASSET_BASE}/chromanche-extension-${TAG}.zip"
+SRV_URL="${ASSET_BASE}/chromanche-mcp-server-${TAG}.tgz"
+
+# Releases before the rename published assets with the old BrowserUse prefix.
+# Keep the main-branch installer compatible until a Chromanche-named release is
+# available.
+if ! curl -fsLI "$EXT_URL" >/dev/null 2>&1; then
+  EXT_URL="${ASSET_BASE}/browseruse-extension-${TAG}.zip"
+fi
+if ! curl -fsLI "$SRV_URL" >/dev/null 2>&1; then
+  SRV_URL="${ASSET_BASE}/browseruse-mcp-server-${TAG}.tgz"
+fi
 
 _note "Installing ${REPO} ${TAG}"
 
