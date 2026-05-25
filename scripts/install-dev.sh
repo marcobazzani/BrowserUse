@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Chromanche DEV channel installer — convenience wrapper around install.sh
-# that installs the latest source commit instead of the latest release.
+# that installs the latest CI-built dev artifact instead of the latest release.
 #
 # Single install: this overwrites whatever is currently at ~/.chromanche and
 # replaces the existing 'chromanche' MCP entry in Claude Code / Codex /

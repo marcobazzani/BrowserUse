@@ -11,7 +11,7 @@
 #
 # Channels (single install — dev replaces stable, same dir, same MCP name):
 #   stable (default) — latest GitHub release
-#   dev              — latest source commit from CHROMANCHE_REF (default: main)
+#   dev              — latest CI-built dev-latest artifact from main
 #
 # Or directly:
 #   CHROMANCHE_CHANNEL=dev bash scripts/install.sh
@@ -46,11 +46,7 @@ esac
 for cmd in curl tar node; do
   command -v "$cmd" >/dev/null 2>&1 || _die "'$cmd' is required but not installed."
 done
-if [ "$CHANNEL" = "stable" ]; then
-  command -v unzip >/dev/null 2>&1 || _die "'unzip' is required but not installed."
-else
-  command -v pnpm >/dev/null 2>&1 || _die "'pnpm' is required for dev installs but not installed."
-fi
+command -v unzip >/dev/null 2>&1 || _die "'unzip' is required but not installed."
 
 NODE_MAJOR="$(node -e 'console.log(process.versions.node.split(".")[0])')"
 if [ "$NODE_MAJOR" -lt 20 ]; then
@@ -64,51 +60,35 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$INSTALL_DIR"
 
 if [ "$CHANNEL" = "dev" ]; then
-  REF="${CHROMANCHE_REF:-main}"
-  _note "Downloading ${REPO}@${REF} source..."
-  curl -fsSL "https://github.com/${REPO}/archive/${REF}.tar.gz" -o "${TMP}/source.tgz"
-  mkdir -p "${TMP}/source"
-  tar -xzf "${TMP}/source.tgz" -C "${TMP}/source" --strip-components=1
+  TAG="dev-latest"
+  DISPLAY_VERSION="${TAG}"
+  ASSET_BASE="https://github.com/${REPO}/releases/download/${TAG}"
+  EXT_URL="${ASSET_BASE}/chromanche-extension-${TAG}.zip"
+  SRV_URL="${ASSET_BASE}/chromanche-mcp-server-${TAG}.tgz"
 
-  COMMIT="$(cd "${TMP}/source" && node -e '
-const fs = require("fs");
-const path = ".git_archival.txt";
-if (!fs.existsSync(path)) process.exit(0);
-const text = fs.readFileSync(path, "utf8");
-const m = text.match(/^node: ([0-9a-f]{40})$/m);
-if (m) process.stdout.write(m[1]);
-')"
-  DISPLAY_VERSION="dev ${REF}${COMMIT:+ (${COMMIT})}"
-  _note "Building Chromanche ${DISPLAY_VERSION}"
+  _note "Installing ${REPO} ${TAG}"
 
-  (
-    cd "${TMP}/source"
-    pnpm install --frozen-lockfile
-    pnpm -r build
-  )
-
-  if [ -f "${TMP}/source/scripts/cleanup-legacy.sh" ]; then
-    bash "${TMP}/source/scripts/cleanup-legacy.sh" || _warn "Legacy BrowserUse cleanup hit an error — continuing."
+  RAW="https://raw.githubusercontent.com/${REPO}/main"
+  mkdir -p "${TMP}/lib"
+  if curl -fsSL -o "${TMP}/cleanup-legacy.sh" "${RAW}/scripts/cleanup-legacy.sh" 2>/dev/null \
+     && curl -fsSL -o "${TMP}/lib/mcp-config.mjs" "${RAW}/scripts/lib/mcp-config.mjs" 2>/dev/null; then
+    bash "${TMP}/cleanup-legacy.sh" || _warn "Legacy BrowserUse cleanup hit an error — continuing."
   fi
 
-  _note "Installing extension to ${EXT_DIR}"
+  _note "Downloading dev extension..."
+  curl -fsSL -o "${TMP}/extension.zip" "$EXT_URL"
+  _note "Downloading dev MCP server..."
+  curl -fsSL -o "${TMP}/mcp-server.tgz" "$SRV_URL"
+
+  _note "Unpacking extension to ${EXT_DIR}"
   rm -rf "$EXT_DIR"
   mkdir -p "$EXT_DIR"
-  cp -R "${TMP}/source/packages/extension/dist/." "$EXT_DIR/"
-  node -e '
-const fs = require("fs");
-const path = process.argv[1];
-const commit = process.argv[2];
-const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
-manifest.version_name = `${manifest.version}-dev${commit ? `+${commit.slice(0, 7)}` : ""}`;
-fs.writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
-' "${EXT_DIR}/manifest.json" "${COMMIT:-}"
+  unzip -q "${TMP}/extension.zip" -d "$EXT_DIR"
 
-  _note "Installing MCP server to ${SERVER_DIR}"
+  _note "Unpacking MCP server to ${SERVER_DIR}"
   rm -rf "$SERVER_DIR"
   mkdir -p "$SERVER_DIR"
-  cp -R "${TMP}/source/packages/mcp-server/dist" "$SERVER_DIR/"
-  cp "${TMP}/source/packages/mcp-server/package.json" "$SERVER_DIR/package.json"
+  tar -xzf "${TMP}/mcp-server.tgz" -C "$SERVER_DIR"
 else
   # /releases/latest redirects to /releases/tag/vX.Y.Z (skips prereleases) —
   # no API, no auth, no rate limit.

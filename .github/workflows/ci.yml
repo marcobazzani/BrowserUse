@@ -29,3 +29,64 @@ jobs:
       - run: pnpm -r build
       - run: pnpm -r test:unit
       - run: pnpm -r test:integration
+
+  dev-assets:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -F @chromanche/shared build
+      - run: pnpm -F @chromanche/mcp-server build
+      - run: pnpm -F @chromanche/extension build
+
+      - name: mark extension as dev build
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = 'packages/extension/dist/manifest.json';
+          const manifest = JSON.parse(fs.readFileSync(path, 'utf8'));
+          manifest.version_name = `${manifest.version}-dev+${process.env.GITHUB_SHA.slice(0, 7)}`;
+          fs.writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+      - name: package dev assets
+        run: |
+          cd packages/extension/dist
+          zip -r "${{ github.workspace }}/chromanche-extension-dev-latest.zip" .
+          cd "${{ github.workspace }}/packages/mcp-server"
+          tar -czf "${{ github.workspace }}/chromanche-mcp-server-dev-latest.tgz" dist package.json
+
+      - name: publish rolling dev release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          git tag -f dev-latest "$SHA"
+          git push -f origin dev-latest
+          if gh release view dev-latest >/dev/null 2>&1; then
+            gh release upload dev-latest \
+              chromanche-extension-dev-latest.zip \
+              chromanche-mcp-server-dev-latest.tgz \
+              --clobber
+          else
+            gh release create dev-latest \
+              chromanche-extension-dev-latest.zip \
+              chromanche-mcp-server-dev-latest.tgz \
+              --title "dev-latest" \
+              --notes "Rolling dev build for ${SHA}." \
+              --prerelease
+          fi
