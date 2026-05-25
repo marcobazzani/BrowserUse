@@ -95,6 +95,14 @@ if (m) process.stdout.write(m[1]);
   rm -rf "$EXT_DIR"
   mkdir -p "$EXT_DIR"
   cp -R "${TMP}/source/packages/extension/dist/." "$EXT_DIR/"
+  node -e '
+const fs = require("fs");
+const path = process.argv[1];
+const commit = process.argv[2];
+const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+manifest.version_name = `${manifest.version}-dev${commit ? `+${commit.slice(0, 7)}` : ""}`;
+fs.writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+' "${EXT_DIR}/manifest.json" "${COMMIT:-}"
 
   _note "Installing MCP server to ${SERVER_DIR}"
   rm -rf "$SERVER_DIR"
