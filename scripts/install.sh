@@ -5,15 +5,13 @@
 # token+port from your timezone + OS on each start. No copy-paste, no port
 # config.
 #
-# Channels (single install — dev replaces stable, same dir, same MCP name):
-#   stable (default) — latest non-prerelease tag, e.g. v0.10.0
-#   dev              — latest GitHub prerelease tag, e.g. v0.10.0-rc.2
-#                      Re-running with channel=stable later puts you back on
-#                      the latest stable build.
-#
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/marcobazzani/Chromanche/main/scripts/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/marcobazzani/Chromanche/main/scripts/install-dev.sh | bash
+#
+# Channels (single install — dev replaces stable, same dir, same MCP name):
+#   stable (default) — latest GitHub release
+#   dev              — latest source commit from CHROMANCHE_REF (default: main)
 #
 # Or directly:
 #   CHROMANCHE_CHANNEL=dev bash scripts/install.sh
@@ -45,28 +43,64 @@ case "$OS" in
 esac
 
 # --- Dependencies ------------------------------------------------------------
-for cmd in curl unzip tar node; do
+for cmd in curl tar node; do
   command -v "$cmd" >/dev/null 2>&1 || _die "'$cmd' is required but not installed."
 done
+if [ "$CHANNEL" = "stable" ]; then
+  command -v unzip >/dev/null 2>&1 || _die "'unzip' is required but not installed."
+else
+  command -v pnpm >/dev/null 2>&1 || _die "'pnpm' is required for dev installs but not installed."
+fi
 
 NODE_MAJOR="$(node -e 'console.log(process.versions.node.split(".")[0])')"
 if [ "$NODE_MAJOR" -lt 20 ]; then
   _die "Node 20+ required (found $(node -v)). Upgrade and re-run."
 fi
 
-# --- Resolve target version --------------------------------------------------
+# --- Download + unpack -------------------------------------------------------
+TMP="$(mktemp -d -t chromanche-install.XXXXXX)"
+trap 'rm -rf "$TMP"' EXIT
+
+mkdir -p "$INSTALL_DIR"
+
 if [ "$CHANNEL" = "dev" ]; then
-  # Latest prerelease — uses GitHub REST API (anonymous, low rate limit but
-  # one call per install is fine). Node is already a hard dep so we use it
-  # to parse JSON without needing jq/python on the target machine.
-  _note "Looking up latest Chromanche PRE-RELEASE..."
-  RELEASES_JSON="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=20" 2>/dev/null || true)"
-  TAG="$(printf '%s' "$RELEASES_JSON" \
-    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);const r=a.find(x=>x.prerelease&&!x.draft);process.stdout.write(r?r.tag_name:"");}catch(e){}})' \
-    || true)"
-  if [ -z "${TAG:-}" ]; then
-    _die "Could not resolve latest prerelease. Check your network and rate limit, or set CHROMANCHE_TAG=vX.Y.Z-rc.N to override."
+  REF="${CHROMANCHE_REF:-main}"
+  _note "Downloading ${REPO}@${REF} source..."
+  curl -fsSL "https://github.com/${REPO}/archive/${REF}.tar.gz" -o "${TMP}/source.tgz"
+  mkdir -p "${TMP}/source"
+  tar -xzf "${TMP}/source.tgz" -C "${TMP}/source" --strip-components=1
+
+  COMMIT="$(cd "${TMP}/source" && node -e '
+const fs = require("fs");
+const path = ".git_archival.txt";
+if (!fs.existsSync(path)) process.exit(0);
+const text = fs.readFileSync(path, "utf8");
+const m = text.match(/^node: ([0-9a-f]{40})$/m);
+if (m) process.stdout.write(m[1]);
+')"
+  DISPLAY_VERSION="dev ${REF}${COMMIT:+ (${COMMIT})}"
+  _note "Building Chromanche ${DISPLAY_VERSION}"
+
+  (
+    cd "${TMP}/source"
+    pnpm install --frozen-lockfile
+    pnpm -r build
+  )
+
+  if [ -f "${TMP}/source/scripts/cleanup-legacy.sh" ]; then
+    bash "${TMP}/source/scripts/cleanup-legacy.sh" || _warn "Legacy BrowserUse cleanup hit an error — continuing."
   fi
+
+  _note "Installing extension to ${EXT_DIR}"
+  rm -rf "$EXT_DIR"
+  mkdir -p "$EXT_DIR"
+  cp -R "${TMP}/source/packages/extension/dist/." "$EXT_DIR/"
+
+  _note "Installing MCP server to ${SERVER_DIR}"
+  rm -rf "$SERVER_DIR"
+  mkdir -p "$SERVER_DIR"
+  cp -R "${TMP}/source/packages/mcp-server/dist" "$SERVER_DIR/"
+  cp "${TMP}/source/packages/mcp-server/package.json" "$SERVER_DIR/package.json"
 else
   # /releases/latest redirects to /releases/tag/vX.Y.Z (skips prereleases) —
   # no API, no auth, no rate limit.
@@ -78,63 +112,58 @@ else
   if [ -z "${TAG:-}" ]; then
     _die "Could not resolve latest release. Check your network and try again."
   fi
+
+  # Explicit override always wins.
+  TAG="${CHROMANCHE_TAG:-$TAG}"
+  DISPLAY_VERSION="${TAG}"
+
+  ASSET_BASE="https://github.com/${REPO}/releases/download/${TAG}"
+  EXT_URL="${ASSET_BASE}/chromanche-extension-${TAG}.zip"
+  SRV_URL="${ASSET_BASE}/chromanche-mcp-server-${TAG}.tgz"
+
+  # Releases before the rename published assets with the old BrowserUse prefix.
+  # Keep the main-branch installer compatible until a Chromanche-named release is
+  # available.
+  if ! curl -fsLI "$EXT_URL" >/dev/null 2>&1; then
+    EXT_URL="${ASSET_BASE}/browseruse-extension-${TAG}.zip"
+  fi
+  if ! curl -fsLI "$SRV_URL" >/dev/null 2>&1; then
+    SRV_URL="${ASSET_BASE}/browseruse-mcp-server-${TAG}.tgz"
+  fi
+
+  _note "Installing ${REPO} ${TAG}"
+
+  # BrowserUse was renamed to Chromanche (trademark). Nothing is migrated — the
+  # old install is dropped so the fresh one takes over cleanly. Fetch the helper
+  # scripts from the repo so this works whether install.sh was piped from curl
+  # or run from a local clone.
+  RAW="https://raw.githubusercontent.com/${REPO}/${TAG}"
+  mkdir -p "${TMP}/lib"
+  if curl -fsSL -o "${TMP}/cleanup-legacy.sh" "${RAW}/scripts/cleanup-legacy.sh" 2>/dev/null \
+     && curl -fsSL -o "${TMP}/lib/mcp-config.mjs" "${RAW}/scripts/lib/mcp-config.mjs" 2>/dev/null; then
+    bash "${TMP}/cleanup-legacy.sh" || _warn "Legacy BrowserUse cleanup hit an error — continuing."
+  fi
+
+  _note "Downloading extension..."
+  curl -fsSL -o "${TMP}/extension.zip" "$EXT_URL"
+  _note "Downloading MCP server..."
+  curl -fsSL -o "${TMP}/mcp-server.tgz" "$SRV_URL"
+
+  _note "Unpacking extension to ${EXT_DIR}"
+  rm -rf "$EXT_DIR"
+  mkdir -p "$EXT_DIR"
+  unzip -q "${TMP}/extension.zip" -d "$EXT_DIR"
+
+  _note "Unpacking MCP server to ${SERVER_DIR}"
+  rm -rf "$SERVER_DIR"
+  mkdir -p "$SERVER_DIR"
+  tar -xzf "${TMP}/mcp-server.tgz" -C "$SERVER_DIR"
 fi
-# Explicit override always wins.
-TAG="${CHROMANCHE_TAG:-$TAG}"
-
-ASSET_BASE="https://github.com/${REPO}/releases/download/${TAG}"
-EXT_URL="${ASSET_BASE}/chromanche-extension-${TAG}.zip"
-SRV_URL="${ASSET_BASE}/chromanche-mcp-server-${TAG}.tgz"
-
-# Releases before the rename published assets with the old BrowserUse prefix.
-# Keep the main-branch installer compatible until a Chromanche-named release is
-# available.
-if ! curl -fsLI "$EXT_URL" >/dev/null 2>&1; then
-  EXT_URL="${ASSET_BASE}/browseruse-extension-${TAG}.zip"
-fi
-if ! curl -fsLI "$SRV_URL" >/dev/null 2>&1; then
-  SRV_URL="${ASSET_BASE}/browseruse-mcp-server-${TAG}.tgz"
-fi
-
-_note "Installing ${REPO} ${TAG}"
-
-# --- Download + unpack -------------------------------------------------------
-TMP="$(mktemp -d -t chromanche-install.XXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
-
-# --- Remove any legacy BrowserUse install -----------------------------------
-# BrowserUse was renamed to Chromanche (trademark). Nothing is migrated — the
-# old install is dropped so the fresh one takes over cleanly. Fetch the helper
-# scripts from the repo so this works whether install.sh was piped from curl
-# or run from a local clone.
-RAW="https://raw.githubusercontent.com/${REPO}/${TAG}"
-mkdir -p "${TMP}/lib"
-if curl -fsSL -o "${TMP}/cleanup-legacy.sh" "${RAW}/scripts/cleanup-legacy.sh" 2>/dev/null \
-   && curl -fsSL -o "${TMP}/lib/mcp-config.mjs" "${RAW}/scripts/lib/mcp-config.mjs" 2>/dev/null; then
-  bash "${TMP}/cleanup-legacy.sh" || _warn "Legacy BrowserUse cleanup hit an error — continuing."
-fi
-
-_note "Downloading extension..."
-curl -fsSL -o "${TMP}/extension.zip" "$EXT_URL"
-_note "Downloading MCP server..."
-curl -fsSL -o "${TMP}/mcp-server.tgz" "$SRV_URL"
-
-mkdir -p "$INSTALL_DIR"
-
-_note "Unpacking extension to ${EXT_DIR}"
-rm -rf "$EXT_DIR"
-mkdir -p "$EXT_DIR"
-unzip -q "${TMP}/extension.zip" -d "$EXT_DIR"
-
-_note "Unpacking MCP server to ${SERVER_DIR}"
-rm -rf "$SERVER_DIR"
-mkdir -p "$SERVER_DIR"
-tar -xzf "${TMP}/mcp-server.tgz" -C "$SERVER_DIR"
 
 # --- Register with Claude Code ----------------------------------------------
 ENTRY="${SERVER_DIR}/dist/index.cjs"
 if [ ! -f "$ENTRY" ]; then
-  _die "MCP server entrypoint not found at $ENTRY — release archive layout may have changed."
+  _die "MCP server entrypoint not found at $ENTRY — install layout may have changed."
 fi
 
 if command -v claude >/dev/null 2>&1; then
@@ -269,7 +298,7 @@ fi
 cat <<EOF
 
 ------------------------------------------------------------------
-  Chromanche ${TAG} installed.
+  Chromanche ${DISPLAY_VERSION} installed.
 ------------------------------------------------------------------
 
   Extension:   ${EXT_DIR}

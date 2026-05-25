@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Chromanche DEV channel installer — convenience wrapper around install.sh
-# that pulls the latest GitHub prerelease (e.g. v0.10.0-rc.2) instead of the
-# latest stable tag.
+# that installs the latest source commit instead of the latest release.
 #
 # Single install: this overwrites whatever is currently at ~/.chromanche and
-# replaces the existing 'chromanche' MCP entry in Claude Code / OpenCode /
-# GitHub Copilot CLI. Re-run with the regular install.sh to switch back to
-# stable.
+# replaces the existing 'chromanche' MCP entry in Claude Code / Codex /
+# OpenCode / GitHub Copilot CLI. Re-run with the regular install.sh to switch
+# back to stable.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/marcobazzani/Chromanche/main/scripts/install-dev.sh | bash
