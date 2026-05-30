@@ -14,7 +14,9 @@ MCP_CONFIG_TOOL="${HERE}/lib/mcp-config.mjs"
 LEGACY_NAME="browseruse"
 LEGACY_DIR="${HOME}/.${LEGACY_NAME}"
 CLAUDE_CFG="${HOME}/.claude/settings.json"
-OPENCODE_CFG="${HOME}/.opencode/config.json"
+XDG_CFG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
+OPENCODE_CFG="${XDG_CFG_HOME}/opencode/opencode.json"
+OPENCODE_LEGACY_CFG="${HOME}/.opencode/config.json"
 COPILOT_CFG="${HOME}/.copilot/mcp-config.json"
 CODEX_CFG="${HOME}/.codex/config.toml"
 
@@ -27,7 +29,7 @@ _has_legacy() {
      claude mcp list 2>/dev/null | grep -q "^${LEGACY_NAME}"; then
     return 0
   fi
-  for cfg in "$CLAUDE_CFG" "$OPENCODE_CFG" "$COPILOT_CFG" "$CODEX_CFG"; do
+  for cfg in "$CLAUDE_CFG" "$OPENCODE_CFG" "$OPENCODE_LEGACY_CFG" "$COPILOT_CFG" "$CODEX_CFG"; do
     [ -f "$cfg" ] && grep -q "\"${LEGACY_NAME}\"" "$cfg" && return 0
   done
   [ -f "$CODEX_CFG" ] && grep -q "\[mcp_servers\.${LEGACY_NAME}\]" "$CODEX_CFG" && return 0
@@ -47,7 +49,10 @@ cleanup_legacy() {
   node "$MCP_CONFIG_TOOL" remove "$CLAUDE_CFG" "${LEGACY_NAME}" || true
 
   # OpenCode + GitHub Copilot CLI: drop the entry from their JSON configs.
+  # OpenCode's real config lives at the XDG path; the legacy ~/.opencode path
+  # was a bug in earlier installers but we still clean it for completeness.
   node "$MCP_CONFIG_TOOL" remove "$OPENCODE_CFG" "${LEGACY_NAME}" || true
+  node "$MCP_CONFIG_TOOL" remove "$OPENCODE_LEGACY_CFG" "${LEGACY_NAME}" || true
   node "$MCP_CONFIG_TOOL" remove "$COPILOT_CFG" "${LEGACY_NAME}" || true
 
   # Codex stores MCP servers in ~/.codex/config.toml.

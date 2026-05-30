@@ -20,14 +20,15 @@ let bin: string;
 let commandLog: string;
 
 const claudeCfg = () => join(home, ".claude", "settings.json");
-const opencodeCfg = () => join(home, ".opencode", "config.json");
+const opencodeCfg = () => join(home, ".config", "opencode", "opencode.json");
+const opencodeLegacyCfg = () => join(home, ".opencode", "config.json");
 const copilotCfg = () => join(home, ".copilot", "mcp-config.json");
 const codexCfg = () => join(home, ".codex", "config.toml");
 const readJson = (p: string) => JSON.parse(readFileSync(p, "utf8"));
 
-const writeJson = (dir: string, file: string, data: unknown) => {
-  mkdirSync(join(home, dir), { recursive: true });
-  writeFileSync(join(home, dir, file), JSON.stringify(data, null, 2));
+const writeJson = (relDir: string, file: string, data: unknown) => {
+  mkdirSync(join(home, relDir), { recursive: true });
+  writeFileSync(join(home, relDir, file), JSON.stringify(data, null, 2));
 };
 
 const writeFakeCommand = (name: string) => {
@@ -43,7 +44,12 @@ const writeFakeCommand = (name: string) => {
 
 const run = () =>
   execFileSync("bash", [SCRIPT], {
-    env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}` },
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: join(home, ".config"),
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    },
     encoding: "utf8",
   });
 
@@ -72,11 +78,18 @@ describe("uninstall.sh", () => {
         keepme: { command: "x" },
       },
     });
-    writeJson(".opencode", "config.json", {
+    writeJson(".config/opencode", "opencode.json", {
       mcp: {
         chromanche: { type: "local" },
         browseruse: { type: "local" },
         keepme: { type: "local" },
+      },
+    });
+    // Stale config left behind by older installers that wrote to the wrong path.
+    writeJson(".opencode", "config.json", {
+      mcp: {
+        chromanche: { type: "local" },
+        browseruse: { type: "local" },
       },
     });
     writeJson(".copilot", "mcp-config.json", {
@@ -108,6 +121,9 @@ describe("uninstall.sh", () => {
     expect(existsSync(join(home, ".browseruse"))).toBe(false);
     expect(readJson(claudeCfg()).mcpServers).toEqual({ keepme: { command: "x" } });
     expect(readJson(opencodeCfg()).mcp).toEqual({ keepme: { type: "local" } });
+    // The legacy path must also be scrubbed so users do not retain a ghost
+    // entry that points at a deleted binary.
+    expect(readJson(opencodeLegacyCfg())).not.toHaveProperty("mcp");
     expect(readJson(copilotCfg()).mcpServers).toEqual({ keepme: { type: "stdio" } });
     expect(readFileSync(codexCfg(), "utf8")).toBe([
       "[mcp_servers.keepme]",

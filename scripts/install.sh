@@ -59,7 +59,24 @@ trap 'rm -rf "$TMP"' EXIT
 
 mkdir -p "$INSTALL_DIR"
 
-if [ "$CHANNEL" = "dev" ]; then
+# CHROMANCHE_INSTALL_OFFLINE lets integration tests drive the registration
+# logic without hitting GitHub. Point it at a directory laid out like a real
+# install (extension/ + mcp-server/dist/index.cjs) and the installer copies
+# from it instead of downloading. Not documented for end users on purpose.
+if [ -n "${CHROMANCHE_INSTALL_OFFLINE:-}" ]; then
+  if [ ! -f "${CHROMANCHE_INSTALL_OFFLINE}/mcp-server/dist/index.cjs" ]; then
+    _die "CHROMANCHE_INSTALL_OFFLINE=${CHROMANCHE_INSTALL_OFFLINE} is missing mcp-server/dist/index.cjs"
+  fi
+  TAG="offline"
+  DISPLAY_VERSION="${TAG}"
+  _note "Installing from offline source: ${CHROMANCHE_INSTALL_OFFLINE}"
+  rm -rf "$EXT_DIR" "$SERVER_DIR"
+  mkdir -p "$EXT_DIR" "$SERVER_DIR"
+  if [ -d "${CHROMANCHE_INSTALL_OFFLINE}/extension" ]; then
+    cp -R "${CHROMANCHE_INSTALL_OFFLINE}/extension/." "$EXT_DIR/"
+  fi
+  cp -R "${CHROMANCHE_INSTALL_OFFLINE}/mcp-server/." "$SERVER_DIR/"
+elif [ "$CHANNEL" = "dev" ]; then
   TAG="dev-latest"
   DISPLAY_VERSION="${TAG}"
   ASSET_BASE="https://github.com/${REPO}/releases/download/${TAG}"
@@ -180,11 +197,17 @@ EOF
 fi
 
 # --- Register with OpenCode -------------------------------------------------
-OC_CFG="${HOME}/.opencode/config.json"
+# OpenCode follows XDG on macOS/Linux: ~/.config/opencode/opencode.json. The
+# old ~/.opencode/config.json path was a guess from an early installer and
+# was never read by OpenCode — we still clean it up below so users who hit
+# the bug do not end up with a stale, ignored config file.
+XDG_CFG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
+OC_CFG="${XDG_CFG_HOME}/opencode/opencode.json"
+OC_LEGACY_CFG="${HOME}/.opencode/config.json"
 OPENCODE_STATUS="skip"
 if command -v opencode >/dev/null 2>&1; then
   if command -v jq >/dev/null 2>&1; then
-    _note "Registering MCP server with OpenCode..."
+    _note "Registering MCP server with OpenCode (${OC_CFG})..."
     mkdir -p "$(dirname "$OC_CFG")"
     if [ -f "$OC_CFG" ]; then
       TMP_CFG="$(mktemp)"
@@ -193,8 +216,19 @@ if command -v opencode >/dev/null 2>&1; then
         "$OC_CFG" > "$TMP_CFG" && mv "$TMP_CFG" "$OC_CFG"
     else
       jq -n --arg n "node" --arg e "$ENTRY" --arg k "$MCP_NAME" \
-        '{"mcp":{($k):{"type":"local","command":[$n,$e],"enabled":true}}}' \
+        '{"$schema":"https://opencode.ai/config.json","mcp":{($k):{"type":"local","command":[$n,$e],"enabled":true}}}' \
         > "$OC_CFG"
+    fi
+    # Drop a stale entry from the legacy path so the user does not end up
+    # with two MCP definitions, one of them dead.
+    if [ -f "$OC_LEGACY_CFG" ]; then
+      TMP_CFG="$(mktemp)"
+      if jq --arg k "$MCP_NAME" 'if .mcp[$k] then del(.mcp[$k]) | (if (.mcp // {}) == {} then del(.mcp) else . end) else . end' \
+        "$OC_LEGACY_CFG" > "$TMP_CFG" 2>/dev/null; then
+        mv "$TMP_CFG" "$OC_LEGACY_CFG"
+      else
+        rm -f "$TMP_CFG"
+      fi
     fi
     OPENCODE_STATUS="registered"
   else
@@ -202,6 +236,7 @@ if command -v opencode >/dev/null 2>&1; then
     cat <<EOF
 
 {
+  "\$schema": "https://opencode.ai/config.json",
   "mcp": {
     "${MCP_NAME}": {
       "type": "local",

@@ -7,7 +7,9 @@ REPO="marcobazzani/Chromanche"
 REF="${CHROMANCHE_REF:-main}"
 
 CLAUDE_CFG="${HOME}/.claude/settings.json"
-OPENCODE_CFG="${HOME}/.opencode/config.json"
+XDG_CFG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
+OPENCODE_CFG="${XDG_CFG_HOME}/opencode/opencode.json"
+OPENCODE_LEGACY_CFG="${HOME}/.opencode/config.json"
 COPILOT_CFG="${HOME}/.copilot/mcp-config.json"
 CODEX_CFG="${HOME}/.codex/config.toml"
 
@@ -48,6 +50,7 @@ if [ -n "$MCP_CONFIG_TOOL" ]; then
   for name in "${NAMES[@]}"; do
     node "$MCP_CONFIG_TOOL" remove "$CLAUDE_CFG" "$name" || true
     node "$MCP_CONFIG_TOOL" remove "$OPENCODE_CFG" "$name" || true
+    node "$MCP_CONFIG_TOOL" remove "$OPENCODE_LEGACY_CFG" "$name" || true
     node "$MCP_CONFIG_TOOL" remove "$COPILOT_CFG" "$name" || true
     node "$MCP_CONFIG_TOOL" remove-codex "$CODEX_CFG" "$name" || true
   done
