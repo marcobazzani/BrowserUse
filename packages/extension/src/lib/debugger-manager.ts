@@ -44,6 +44,21 @@ export class RingBuffer<T extends { ts: number }> {
 
 type InflightRequest = { start: number; method: string; url: string; type: string };
 
+/**
+ * Retained per-tab request detail (headers + status) for network.getRequest.
+ * Bodies are NOT buffered — they're fetched lazily via Network.getResponseBody
+ * only when the model asks. Bounded to avoid unbounded growth on busy tabs.
+ */
+export interface RequestDetail {
+  requestId: string;
+  ts: number;
+  method: string;
+  url: string;
+  status?: number;
+  requestHeaders: Record<string, string>;
+  responseHeaders: Record<string, string>;
+}
+
 export interface PendingDialog {
   type: string;        // "alert" | "confirm" | "prompt" | "beforeunload"
   message: string;
@@ -64,6 +79,10 @@ export class DebuggerManager {
   private attached = new Set<number>();
   private inflight = new Map<string, InflightRequest>();
   private pendingDialogs = new Map<number, PendingDialog>();
+  // Per-tab bounded list of recent request details (headers/status) for
+  // network.getRequest. Bodies fetched lazily, never buffered.
+  private requestDetails = new Map<number, RequestDetail[]>();
+  private static readonly REQUEST_DETAIL_CAP = 500;
   // For cross-origin (OOPIF) iframes, Chromium spins up a separate CDP target.
   // We attach a debuggee per frame target so a11y/DOM/Runtime calls can reach
   // content inside those frames. Key is tabId → map of frame targetId → info.
@@ -163,6 +182,7 @@ export class DebuggerManager {
     this.consoles.delete(tabId);
     this.networks.delete(tabId);
     this.pendingDialogs.delete(tabId);
+    this.requestDetails.delete(tabId);
   }
 
   /**
@@ -316,6 +336,64 @@ export class DebuggerManager {
     return buf.read({ pattern: re, since, limit }, (e) => e.url);
   }
 
+  /**
+   * Fetch headers + body for the NEWEST buffered request whose URL matches
+   * `urlPattern`. Body is fetched lazily via Network.getResponseBody (never
+   * buffered eagerly). Read-only: surfaces only requests the page already made.
+   */
+  async getRequestDetail(
+    tabId: number,
+    urlPattern: string,
+    maxBytes: number,
+  ): Promise<{
+    method: string;
+    url: string;
+    status?: number;
+    requestHeaders: Record<string, string>;
+    responseHeaders: Record<string, string>;
+    body: string;
+    base64Encoded: boolean;
+    truncated: boolean;
+  }> {
+    const list = this.requestDetails.get(tabId) ?? [];
+    const re = new RegExp(urlPattern);
+    // Newest match wins.
+    const detail = [...list].reverse().find((d) => re.test(d.url));
+    if (!detail) {
+      throw new Error(
+        `network.getRequest: no buffered request matching ${urlPattern}. ` +
+        `Run network_read first to see what's available (bodies are only retained for requests made after the tab was attached).`,
+      );
+    }
+    let body = "";
+    let base64Encoded = false;
+    try {
+      const r = await this.sendCommand<{ body: string; base64Encoded: boolean }>(
+        tabId,
+        "Network.getResponseBody",
+        { requestId: detail.requestId },
+      );
+      body = r.body ?? "";
+      base64Encoded = !!r.base64Encoded;
+    } catch {
+      // Body may be evicted from CDP's buffer (long-lived tab) or absent
+      // (204/304). Return headers/status with an empty body rather than fail.
+      body = "";
+    }
+    const truncated = body.length > maxBytes;
+    if (truncated) body = body.slice(0, maxBytes);
+    return {
+      method: detail.method,
+      url: detail.url,
+      status: detail.status,
+      requestHeaders: detail.requestHeaders,
+      responseHeaders: detail.responseHeaders,
+      body,
+      base64Encoded,
+      truncated,
+    };
+  }
+
   /** Exposed for tests. */
   onEvent(src: chrome.debugger.Debuggee, method: string, params: Record<string, unknown>): void {
     // Events arrive on whichever session emitted them. For the tab session
@@ -367,17 +445,31 @@ export class DebuggerManager {
       const text = ((params.exceptionDetails as Record<string, unknown> | undefined)?.text as string) ?? "exception";
       consoleBuf.push({ ts: Date.now(), level: "error", text });
     } else if (method === "Network.requestWillBeSent" && netBuf) {
-      const req = (params.request as { method?: string; url?: string }) ?? {};
+      const req = (params.request as { method?: string; url?: string; headers?: Record<string, string> }) ?? {};
       this.inflight.set(params.requestId as string, {
         start: Date.now(),
         method: req.method ?? "GET",
         url: req.url ?? "",
         type: (params.type as string) ?? "Other",
       });
+      // Retain request headers for network.getRequest (bounded per tab).
+      const list = this.requestDetails.get(tabId) ?? [];
+      list.push({
+        requestId: params.requestId as string,
+        ts: Date.now(),
+        method: req.method ?? "GET",
+        url: req.url ?? "",
+        requestHeaders: req.headers ?? {},
+        responseHeaders: {},
+      });
+      if (list.length > DebuggerManager.REQUEST_DETAIL_CAP) {
+        list.splice(0, list.length - DebuggerManager.REQUEST_DETAIL_CAP);
+      }
+      this.requestDetails.set(tabId, list);
     } else if (method === "Network.responseReceived" && netBuf) {
       const cur = this.inflight.get(params.requestId as string);
       if (cur) {
-        const resp = (params.response as { status?: number }) ?? {};
+        const resp = (params.response as { status?: number; headers?: Record<string, string> }) ?? {};
         netBuf.push({
           ts: Date.now(),
           method: cur.method,
@@ -386,6 +478,13 @@ export class DebuggerManager {
           durationMs: Date.now() - cur.start,
           type: cur.type,
         });
+        // Fill in status + response headers on the retained detail.
+        const list = this.requestDetails.get(tabId);
+        const detail = list?.find((d) => d.requestId === (params.requestId as string));
+        if (detail) {
+          detail.status = resp.status;
+          detail.responseHeaders = resp.headers ?? {};
+        }
         this.inflight.delete(params.requestId as string);
       }
     } else if (method === "Page.javascriptDialogOpening") {

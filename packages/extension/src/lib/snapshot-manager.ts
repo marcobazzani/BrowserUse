@@ -38,6 +38,7 @@ export function resolveUid(tabId: number, uid: string): UidEntry | undefined {
 /** Clear uid map for a tab (e.g. on tab close). */
 export function clearUidMap(tabId: number): void {
   tabUidMaps.delete(tabId);
+  tabPrevLines.delete(tabId);
 }
 
 // Roles that are always "interesting" even without a name.
@@ -84,7 +85,12 @@ interface FrameSubtree {
 
 interface SnapshotOptions {
   includeBounds?: boolean;
+  /** "last" returns only lines changed since the previous a11y snapshot of this tab. */
+  since?: "full" | "last";
 }
+
+/** Previous rendered a11y lines per tab — baseline for since="last" diffing. */
+const tabPrevLines = new Map<number, string[]>();
 
 function getProp(node: AXNode, propName: string): unknown {
   const p = node.properties?.find((x) => x.name === propName);
@@ -109,7 +115,7 @@ export async function captureA11ySnapshot(
   tabId: number,
   maxBytes: number,
   opts: SnapshotOptions = {},
-): Promise<{ content: string; truncated: boolean }> {
+): Promise<{ content: string; truncated: boolean; diff?: { added: number; removed: number }; baseline?: boolean }> {
   // Refresh OOPIF attachments — new iframes since the last snapshot
   // need to be discovered, and old ones cleaned up.
   await mgr.syncFrameTargets(tabId).catch(() => {});
@@ -275,6 +281,35 @@ export async function captureA11ySnapshot(
 
   await walkTree(main.nodes, 0, undefined);
   tabUidMaps.set(tabId, uidMap);
+
+  const prev = tabPrevLines.get(tabId);
+  // Always update the baseline to the freshly rendered full tree.
+  tabPrevLines.set(tabId, lines);
+
+  if (opts.since === "last") {
+    if (!prev) {
+      // No baseline yet → return the full tree and flag it.
+      return { content: lines.join("\n"), truncated, baseline: true };
+    }
+    // Diff on the uid-stripped line (role/name/attrs/indent) because uids are
+    // assigned from a monotonic counter and change every snapshot — comparing
+    // raw lines would mark everything changed. We emit the CURRENT full line
+    // (with its fresh uid) for additions so the model can act on it.
+    const stripUid = (l: string) => l.replace(/\[e\d+\]\s*/, "");
+    const prevKeys = new Set(prev.map(stripUid));
+    const curKeys = new Set(lines.map(stripUid));
+    const added = lines.filter((l) => !prevKeys.has(stripUid(l)));
+    const removed = prev.filter((l) => !curKeys.has(stripUid(l)));
+    const diffLines = [
+      ...added.map((l) => `+ ${l}`),
+      ...removed.map((l) => `- ${l}`),
+    ];
+    return {
+      content: diffLines.join("\n"),
+      truncated,
+      diff: { added: added.length, removed: removed.length },
+    };
+  }
 
   return { content: lines.join("\n"), truncated };
 }

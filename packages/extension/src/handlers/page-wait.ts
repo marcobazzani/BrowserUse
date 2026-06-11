@@ -130,6 +130,23 @@ export function registerPageWaitHandlers(d: Dispatcher, mgr: DebuggerManager) {
           satisfied = await evalTruthy(mgr, p.tabId, p.expression!);
           break;
         }
+        case "text": {
+          // Case-insensitive substring of VISIBLE page text (innerText, not
+          // innerHTML — hidden markup must not false-positive). Main frame only.
+          const r = await mgr.sendCommand<{ result: { value: boolean } }>(
+            p.tabId,
+            "Runtime.evaluate",
+            {
+              expression: `((document.body && document.body.innerText) || "").toLowerCase().includes(${JSON.stringify(
+                p.text!.toLowerCase(),
+              )})`,
+              returnByValue: true,
+            },
+          );
+          const present = !!r.result.value;
+          satisfied = p.state === "hidden" || p.state === "detached" ? !present : present;
+          break;
+        }
         case "response": {
           const hits = mgr.readNetwork(p.tabId, p.urlPattern, armedAt, 2000);
           satisfied = hits.length > 0;

@@ -694,7 +694,7 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     const p = PageClickParamsSchema.parse(raw);
     const el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
     if (!p.force) {
-      const act = await waitForActionable(mgr, p.tabId, el);
+      const act = await waitForActionable(mgr, p.tabId, el, p.timeoutMs);
       if (!act.actionable) {
         throw new Error(
           `page.click target not actionable: ${act.reason}. ` +
@@ -768,7 +768,7 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     }
 
     if (!p.force) {
-      const act = await waitForActionable(mgr, p.tabId, el);
+      const act = await waitForActionable(mgr, p.tabId, el, p.timeoutMs);
       if (!act.actionable) {
         throw new Error(
           `page.type target not actionable: ${act.reason}. ` +

@@ -28,6 +28,10 @@ function fakeChrome() {
       focusedTargetId: undefined as string | undefined,
       // waitForActionable predicate result; default = actionable & stable.
       actionable: { ok: true, x: 100, y: 100 } as Record<string, unknown>,
+      // page.wait text-mode probe result; default = present.
+      textPresent: true as boolean,
+      // page.snapshot since=last: add an extra a11y node on demand.
+      extraAxNode: false as boolean,
     },
   };
   (globalThis as any).chrome = {
@@ -99,6 +103,11 @@ function fakeChrome() {
           if (params?.expression === "document.hasFocus()") {
             return { result: { type: "boolean", value: target.targetId === state.debuggerState.focusedTargetId } };
           }
+          // page.wait text mode: an innerText.includes(...) probe. Honor a
+          // per-test override so we can simulate text present/absent.
+          if (typeof params?.expression === "string" && params.expression.includes(".innerText")) {
+            return { result: { type: "boolean", value: state.debuggerState.textPresent } };
+          }
           if (typeof params?.expression === "string" && params.expression.includes("activeElement")) {
             return {
               result: {
@@ -151,9 +160,12 @@ function fakeChrome() {
         if (method === "Accessibility.getFullAXTree") {
           return {
             nodes: [
-              { nodeId: "1", backendDOMNodeId: 10, role: { type: "role", value: "WebArea" }, name: { type: "computedString", value: "Test Page" }, childIds: ["2", "3"] },
+              { nodeId: "1", backendDOMNodeId: 10, role: { type: "role", value: "WebArea" }, name: { type: "computedString", value: "Test Page" }, childIds: state.debuggerState.extraAxNode ? ["2", "3", "4"] : ["2", "3"] },
               { nodeId: "2", backendDOMNodeId: 20, role: { type: "role", value: "button" }, name: { type: "computedString", value: "Submit" }, properties: [{ name: "focusable", value: { type: "boolean", value: true } }] },
               { nodeId: "3", backendDOMNodeId: 30, role: { type: "role", value: "textbox" }, name: { type: "computedString", value: "Email" }, properties: [{ name: "focusable", value: { type: "boolean", value: true } }] },
+              ...(state.debuggerState.extraAxNode
+                ? [{ nodeId: "4", backendDOMNodeId: 40, role: { type: "role", value: "button" }, name: { type: "computedString", value: "Confirm" }, properties: [{ name: "focusable", value: { type: "boolean", value: true } }] }]
+                : []),
             ],
           };
         }
@@ -278,6 +290,37 @@ describe("handlers", () => {
       params: { tabId: 1, includeBounds: true },
     });
     expect((resp.result as any).content).toContain("bbox=100,100,100,100");
+  });
+
+  it("page.snapshot since=last returns a full baseline on first call", async () => {
+    // Fresh tab id with no prior snapshot baseline.
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 24, method: "page.snapshot",
+      params: { tabId: 7, since: "last" },
+    });
+    const r = resp.result as any;
+    expect(r.baseline).toBe(true);
+    expect(r.content).toContain("Submit");
+    expect(r.diff).toBeUndefined();
+  });
+
+  it("page.snapshot since=last returns only changed lines after a DOM change", async () => {
+    // First snapshot establishes the baseline.
+    await d.handle({ jsonrpc: "2.0", id: 25, method: "page.snapshot", params: { tabId: 8, since: "last" } });
+    // Simulate a new node appearing.
+    state.debuggerState.extraAxNode = true;
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 26, method: "page.snapshot",
+      params: { tabId: 8, since: "last" },
+    });
+    const r = resp.result as any;
+    expect(r.baseline).toBeUndefined();
+    expect(r.diff.added).toBe(1);
+    expect(r.diff.removed).toBe(0);
+    expect(r.content).toContain("+ ");
+    expect(r.content).toContain("Confirm");
+    // Unchanged nodes are NOT re-emitted — the speed win.
+    expect(r.content).not.toContain("Submit");
   });
 
   it("page.screenshot strips the data URL prefix and returns base64", async () => {
@@ -1011,19 +1054,12 @@ describe("handlers", () => {
   it("page.click throws when the target is not actionable (hidden)", async () => {
     const uids = await snapshotUids(1);
     state.debuggerState.actionable = { ok: false, reason: "hidden" };
-    vi.useFakeTimers();
-    try {
-      const promise = d.handle({
-        jsonrpc: "2.0", id: 300, method: "page.click",
-        params: { tabId: 1, uid: uids[0] },
-      });
-      // Drive the poll loop past its 5s deadline.
-      await vi.advanceTimersByTimeAsync(5_200);
-      const resp = await promise;
-      expect(resp.error?.message).toMatch(/not actionable: hidden/);
-    } finally {
-      vi.useRealTimers();
-    }
+    // Small timeoutMs makes the gate fail fast — no fake timers needed.
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 300, method: "page.click",
+      params: { tabId: 1, uid: uids[0], timeoutMs: 120 },
+    });
+    expect(resp.error?.message).toMatch(/not actionable: hidden/);
   });
 
   it("page.click with force=true bypasses the actionability gate", async () => {
@@ -1112,6 +1148,33 @@ describe("handlers", () => {
       params: { tabId: 1, for: "selector", selector: "#never", timeoutMs: 150, pollMs: 50 },
     });
     expect(resp.error?.message).toMatch(/timed out/);
+  });
+
+  it("page.wait text mode resolves when the text is present", async () => {
+    state.debuggerState.textPresent = true;
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 342, method: "page.wait",
+      params: { tabId: 1, for: "text", text: "Payment complete", timeoutMs: 500, pollMs: 50 },
+    });
+    expect((resp.result as any).matched).toBe(true);
+  });
+
+  it("page.wait text mode times out when the text never appears", async () => {
+    state.debuggerState.textPresent = false;
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 343, method: "page.wait",
+      params: { tabId: 1, for: "text", text: "Nope", timeoutMs: 150, pollMs: 50 },
+    });
+    expect(resp.error?.message).toMatch(/timed out/);
+  });
+
+  it("page.wait text mode with state=hidden resolves when the text is absent", async () => {
+    state.debuggerState.textPresent = false;
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 344, method: "page.wait",
+      params: { tabId: 1, for: "text", text: "Spinner", state: "hidden", timeoutMs: 500, pollMs: 50 },
+    });
+    expect((resp.result as any).matched).toBe(true);
   });
 
   // --- page.waitForDownload (observational) ---

@@ -51,8 +51,9 @@ export function registerPageReadHandlers(d: Dispatcher, mgr: DebuggerManager) {
     const tabId = await resolveTabId(p.tabId);
 
     if (p.mode === "a11y") {
-      const { content, truncated } = await captureA11ySnapshot(mgr, tabId, p.maxBytes, {
+      const { content, truncated, diff, baseline } = await captureA11ySnapshot(mgr, tabId, p.maxBytes, {
         includeBounds: p.includeBounds,
+        since: p.since,
       });
       const tab = await chrome.tabs.get(tabId);
       return {
@@ -61,6 +62,8 @@ export function registerPageReadHandlers(d: Dispatcher, mgr: DebuggerManager) {
         title: tab.title ?? "",
         content,
         truncated,
+        ...(diff ? { diff } : {}),
+        ...(baseline ? { baseline } : {}),
       };
     }
 

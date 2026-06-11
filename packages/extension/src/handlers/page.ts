@@ -1,7 +1,7 @@
 import type { Dispatcher } from "../dispatcher.js";
 import { PageNavigateParamsSchema } from "@chromanche/shared";
 
-function waitForTabLoad(tabId: number, waitUntil: "load" | "domcontentloaded"): Promise<string> {
+function waitForTabLoad(tabId: number, waitUntil: "load" | "domcontentloaded", timeoutMs: number): Promise<string> {
   return new Promise((resolve) => {
     const listener = (id: number, info: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => {
       if (id !== tabId) return;
@@ -15,7 +15,7 @@ function waitForTabLoad(tabId: number, waitUntil: "load" | "domcontentloaded"): 
     setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
       chrome.tabs.get(tabId).then((t) => resolve(t.url ?? ""));
-    }, 30_000);
+    }, timeoutMs);
   });
 }
 
@@ -23,7 +23,7 @@ export function registerPageHandlers(d: Dispatcher) {
   d.register("page.navigate", async (raw) => {
     const p = PageNavigateParamsSchema.parse(raw);
     await chrome.tabs.update(p.tabId, { url: p.url });
-    const finalUrl = await waitForTabLoad(p.tabId, p.waitUntil);
+    const finalUrl = await waitForTabLoad(p.tabId, p.waitUntil, p.timeoutMs);
     return { ok: true as const, finalUrl };
   });
 }

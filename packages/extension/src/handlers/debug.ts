@@ -5,6 +5,7 @@ import {
   PageEvalJsParamsSchema,
   ConsoleReadParamsSchema,
   NetworkReadParamsSchema,
+  NetworkGetRequestParamsSchema,
   PageFetchParamsSchema,
 } from "@chromanche/shared";
 
@@ -57,6 +58,13 @@ export function registerDebugHandlers(d: Dispatcher, mgr: DebuggerManager) {
     const tabId = await resolveTabId(p.tabId);
     await mgr.attach(tabId);
     return mgr.readNetwork(tabId, p.pattern, p.since, p.limit);
+  });
+
+  d.register("network.getRequest", async (raw) => {
+    const p = NetworkGetRequestParamsSchema.parse(raw);
+    const tabId = await resolveTabId(p.tabId);
+    await mgr.attach(tabId);
+    return mgr.getRequestDetail(tabId, p.urlPattern, p.maxBytes);
   });
 
   d.register("page.fetch", async (raw) => {

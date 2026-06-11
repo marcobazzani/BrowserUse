@@ -28,6 +28,7 @@ import {
   PageEvalJsParamsSchema,
   ConsoleReadParamsSchema,
   NetworkReadParamsSchema,
+  NetworkGetRequestParamsSchema,
   ProfilesListParamsSchema,
 } from "@chromanche/shared";
 import type { BridgeServer } from "./bridge.js";
@@ -55,7 +56,7 @@ export const BATCHABLE_TOOLS = [
   "page_handle_dialog", "page_select", "page_upload_file", "page_drag",
   "page_wait",
   "page_fetch", "page_eval_js",
-  "console_read", "network_read",
+  "console_read", "network_read", "network_get_request",
   "session_release",
 ] as const;
 
@@ -193,7 +194,7 @@ export function buildTools(bridge: BridgeServer) {
   };
 
   const page_navigate: Tool<z.infer<ReturnType<typeof withProfile<typeof PageNavigateParamsSchema>>>> = {
-    description: "Navigate the given tab to a URL. Auto-claims the tab.",
+    description: "Navigate the given tab to a URL. Auto-claims the tab. Optional timeoutMs (default 30s) bounds how long to wait for the page to load on slow networks.",
     inputSchema: withProfile(PageNavigateParamsSchema),
     handler: async (params) => {
       guard(bridge);
@@ -206,7 +207,7 @@ export function buildTools(bridge: BridgeServer) {
 
   const page_snapshot: Tool<z.infer<ReturnType<typeof withProfile<typeof PageSnapshotParamsSchema>>>> = {
     description:
-      "Take a snapshot of the page. Default mode=a11y returns a uid-annotated accessibility tree — each interactive element has a [uid] you can pass to click/type/hover. Set includeBounds=true in a11y mode to add bbox=x,y,w,h for visible accessible nodes, useful for generic grid/canvas positioning when row/column-like cells are exposed. mode=text returns innerText. mode=dom returns outerHTML. ALWAYS take a snapshot before interacting with a page. If tabId is omitted, reads the active tab.",
+      "Take a snapshot of the page. Default mode=a11y returns a uid-annotated accessibility tree — each interactive element has a [uid] you can pass to click/type/hover. Set includeBounds=true in a11y mode to add bbox=x,y,w,h for visible accessible nodes, useful for generic grid/canvas positioning when row/column-like cells are exposed. mode=text returns innerText. mode=dom returns outerHTML. Set since=\"last\" (a11y mode) to return ONLY the lines that changed since this tab's previous snapshot (prefixed +/-) — a big token/speed saver on heavy pages; falls back to a full snapshot with baseline=true when there's no prior snapshot. ALWAYS take a snapshot before interacting with a page. If tabId is omitted, reads the active tab.",
     inputSchema: withProfile(PageSnapshotParamsSchema),
     handler: async (params) => {
       guard(bridge);
@@ -272,7 +273,7 @@ export function buildTools(bridge: BridgeServer) {
 
   const page_click: Tool<z.infer<ReturnType<typeof withProfile<typeof PageClickParamsSchema>>>> = {
     description:
-      "Click an element by uid (from a snapshot) or CSS selector. Prefer uid — it is reliable and precise. Set includeSnapshot=true to get an updated accessibility tree in the response.",
+      "Click an element by uid (from a snapshot) or CSS selector. Prefer uid — it is reliable and precise. Auto-waits (up to timeoutMs, default 5s) for the target to be actionable (visible/stable/enabled); pass force=true to skip the gate. Set includeSnapshot=true to get an updated accessibility tree in the response.",
     inputSchema: withProfile(PageClickParamsSchema),
     handler: async (params) => {
       guard(bridge);
@@ -348,6 +349,7 @@ export function buildTools(bridge: BridgeServer) {
       "Wait for a condition before continuing — the antidote to racing heavy async SPAs (Power Automate's lazy canvas, Office365 chrome). Modes (`for`): " +
       "\"uid\" (preferred) waits for a uid from the last snapshot to reach `state` (visible/hidden/attached/detached); OOPIF-aware. " +
       "\"selector\" same, but main-frame only (fallback). " +
+      "\"text\" waits for case-insensitive visible page text to appear (state=visible) or disappear (state=hidden) — the most natural wait, e.g. \"Payment complete\"; main-frame only. " +
       "\"function\" waits for a JS `expression` to evaluate truthy. " +
       "\"response\" waits for a request whose URL matches `urlPattern` to appear in the network buffer AFTER this call is armed (observational — does NOT claim the tab). " +
       "\"loadstate\" waits for load/domcontentloaded/networkidle. Throws on timeout (default 10s).",
@@ -546,6 +548,17 @@ export function buildTools(bridge: BridgeServer) {
     },
   };
 
+  const network_get_request: Tool<z.infer<ReturnType<typeof withProfile<typeof NetworkGetRequestParamsSchema>>>> = {
+    description:
+      "Fetch the headers + body of the most recent buffered network request whose URL matches `urlPattern` (regex). Use after network_read to drill into one request — e.g. inspect a failed Office365/Graph/Power Automate call's response body. Observational: surfaces only requests the page already made on the user's own session (same trust model as page_fetch); never claims the tab, never makes new outbound calls. Body is fetched lazily and capped by maxBytes.",
+    inputSchema: withProfile(NetworkGetRequestParamsSchema),
+    handler: async (params) => {
+      guard(bridge);
+      const { profile, params: p } = splitProfile(params as Record<string, unknown>);
+      return text(await bridge.call("network.getRequest", NetworkGetRequestParamsSchema.parse(p), profile));
+    },
+  };
+
   // Tool name → handler. Built once after every tool is defined so page_batch
   // can dispatch by string. page_batch itself is excluded — no nested batches.
   const registry: Record<string, (args: never) => Promise<ToolResult>> = {
@@ -575,6 +588,7 @@ export function buildTools(bridge: BridgeServer) {
     page_eval_js: page_eval_js.handler,
     console_read: console_read.handler,
     network_read: network_read.handler,
+    network_get_request: network_get_request.handler,
     session_release: session_release.handler,
   };
 
@@ -651,7 +665,7 @@ export function buildTools(bridge: BridgeServer) {
     page_handle_dialog, page_select, page_upload_file, page_drag,
     page_wait, page_wait_for_download,
     session_release,
-    page_fetch, page_eval_js, console_read, network_read,
+    page_fetch, page_eval_js, console_read, network_read, network_get_request,
     page_batch,
   };
 }

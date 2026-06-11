@@ -75,6 +75,8 @@ export const PageNavigateParamsSchema = z
     tabId: z.number().int(),
     url: HttpUrlSchema,
     waitUntil: z.enum(["load", "domcontentloaded"]).default("load"),
+    /** How long to wait for the page to reach waitUntil before returning the current URL. */
+    timeoutMs: z.number().int().positive().max(300_000).default(30_000),
   })
   .strict();
 export const PageNavigateResultSchema = z.object({
@@ -99,6 +101,14 @@ export const PageSnapshotParamsSchema = z
     mode: z.enum(["text", "dom", "a11y"]).default("a11y"),
     maxBytes: z.number().int().positive().max(2_000_000).default(80_000),
     includeBounds: z.boolean().default(false),
+    /**
+     * "full" (default): return the whole snapshot.
+     * "last": return only the lines that changed since the previous a11y
+     * snapshot of this tab (token/speed optimization for heavy pages). uids
+     * stay stable so you can still click/type by uid. If there's no prior
+     * baseline (or mode != a11y), transparently returns the full snapshot.
+     */
+    since: z.enum(["full", "last"]).default("full"),
   })
   .strict();
 export const PageSnapshotResultSchema = z
@@ -108,6 +118,13 @@ export const PageSnapshotResultSchema = z
     title: z.string(),
     content: z.string(),
     truncated: z.boolean(),
+    /** When since="last" produced a diff: counts of changed lines. Absent on full snapshots. */
+    diff: z.object({
+      added: z.number().int(),
+      removed: z.number().int(),
+    }).optional(),
+    /** True when since="last" fell back to a full snapshot (no prior baseline). */
+    baseline: z.boolean().optional(),
   })
   .strict();
 
@@ -143,6 +160,8 @@ export const PageClickParamsSchema = z
     scrollIntoView: z.boolean().default(true),
     /** Skip the actionability gate (visible/stable/enabled) before clicking. */
     force: z.boolean().default(false),
+    /** Max time to wait for the target to become actionable before failing. */
+    timeoutMs: z.number().int().positive().max(120_000).default(5_000),
     includeSnapshot: z.boolean().default(false),
   })
   .strict()
@@ -177,6 +196,8 @@ export const PageTypeParamsSchema = z
     modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).default([]),
     /** Skip the actionability gate (visible/stable/enabled) before typing. */
     force: z.boolean().default(false),
+    /** Max time to wait for the target to become actionable before failing. */
+    timeoutMs: z.number().int().positive().max(120_000).default(5_000),
     includeSnapshot: z.boolean().default(false),
   })
   .strict();
@@ -277,11 +298,13 @@ export const PagePasteResultSchema = z.object({
 export const PageWaitParamsSchema = z
   .object({
     tabId: z.number().int(),
-    for: z.enum(["uid", "selector", "function", "response", "loadstate"]),
+    for: z.enum(["uid", "selector", "text", "function", "response", "loadstate"]),
     // uid mode (preferred) — a uid from the most recent snapshot
     uid: z.string().min(1).optional(),
     // selector mode (fallback, main-frame only)
     selector: z.string().min(1).optional(),
+    // text mode — case-insensitive substring of visible page text (main frame)
+    text: z.string().min(1).optional(),
     state: z.enum(["attached", "visible", "hidden", "detached"]).default("visible"),
     // function mode — JS expression that must evaluate truthy
     expression: z.string().min(1).optional(),
@@ -297,6 +320,7 @@ export const PageWaitParamsSchema = z
   .superRefine((v, ctx) => {
     if (v.for === "uid" && !v.uid) ctx.addIssue({ code: "custom", message: "for=uid requires uid" });
     if (v.for === "selector" && !v.selector) ctx.addIssue({ code: "custom", message: "for=selector requires selector" });
+    if (v.for === "text" && !v.text) ctx.addIssue({ code: "custom", message: "for=text requires text" });
     if (v.for === "function" && !v.expression) ctx.addIssue({ code: "custom", message: "for=function requires expression" });
     if (v.for === "response" && !v.urlPattern) ctx.addIssue({ code: "custom", message: "for=response requires urlPattern" });
   });
@@ -674,6 +698,30 @@ export const NetworkReadParamsSchema = z.object({
 }).strict();
 export const NetworkReadResultSchema = z.array(NetworkEntrySchema);
 
+/* ---------- Network: single-request detail (observational) ---------- */
+
+/**
+ * Fetch headers + body of one buffered request. Read-only: surfaces only
+ * requests the page itself already made, on the user's own session (same
+ * trust model as page.fetch). No new outbound traffic from the server. Match
+ * the newest buffered request whose URL matches `urlPattern` (regex).
+ */
+export const NetworkGetRequestParamsSchema = z.object({
+  tabId: z.number().int().optional(),
+  urlPattern: z.string().min(1),
+  maxBytes: z.number().int().positive().max(2_000_000).default(200_000),
+}).strict();
+export const NetworkGetRequestResultSchema = z.object({
+  method: z.string(),
+  url: z.string(),
+  status: z.number().int().optional(),
+  requestHeaders: z.record(z.string()),
+  responseHeaders: z.record(z.string()),
+  body: z.string(),
+  base64Encoded: z.boolean(),
+  truncated: z.boolean(),
+}).strict();
+
 /** Every method the extension must implement. */
 export const METHODS = {
   "tabs.list":       { params: TabsListParamsSchema,       result: TabsListResultSchema },
@@ -706,6 +754,7 @@ export const METHODS = {
   "page.evalJs":     { params: PageEvalJsParamsSchema,     result: PageEvalJsResultSchema },
   "console.read":    { params: ConsoleReadParamsSchema,    result: ConsoleReadResultSchema },
   "network.read":    { params: NetworkReadParamsSchema,    result: NetworkReadResultSchema },
+  "network.getRequest": { params: NetworkGetRequestParamsSchema, result: NetworkGetRequestResultSchema },
 } as const;
 export type MethodName = keyof typeof METHODS;
 

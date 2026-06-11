@@ -41,6 +41,7 @@ const fakeBridge = () => {
         if (method === "page.evalJs")    return { type: "string", value: "hi" };
         if (method === "console.read")   return [{ ts: 1, level: "error", text: "boom" }];
         if (method === "network.read")   return [{ ts: 1, method: "GET", url: "https://a", type: "Document", status: 200, durationMs: 12 }];
+        if (method === "network.getRequest") return { method: "POST", url: "https://a/api", status: 500, requestHeaders: {}, responseHeaders: { "content-type": "application/json" }, body: "{\"e\":1}", base64Encoded: false, truncated: false };
         throw new Error("unexpected method " + method);
       }),
       isConnected: () => true,
@@ -232,6 +233,20 @@ describe("tool adapters", () => {
     expect(calls.map(c => c.method)).toEqual(["page.wait"]);
   });
 
+  it("page_wait text mode claims then forwards the text", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_wait.handler({ tabId: 7, for: "text", text: "Payment complete" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.wait"]);
+    expect((calls[1]!.params as any).text).toBe("Payment complete");
+  });
+
+  it("page_wait rejects text mode without text", async () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    await expect(tools.page_wait.handler({ tabId: 7, for: "text" } as any)).rejects.toThrow();
+  });
+
   it("page_wait rejects function mode without expression", async () => {
     const { bridge } = fakeBridge();
     const tools = buildTools(bridge);
@@ -320,6 +335,22 @@ describe("tool adapters", () => {
     const tools = buildTools(bridge);
     await tools.network_read.handler({ tabId: 7 });
     expect(calls.map(c => c.method)).toEqual(["network.read"]);
+  });
+
+  it("network_get_request is observational (no claim) and returns headers+body", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    const r = await tools.network_get_request.handler({ tabId: 7, urlPattern: "/api" });
+    expect(calls.map(c => c.method)).toEqual(["network.getRequest"]);
+    const parsed = JSON.parse((r.content[0] as any).text);
+    expect(parsed.status).toBe(500);
+    expect(parsed.responseHeaders["content-type"]).toBe("application/json");
+  });
+
+  it("network_get_request rejects missing urlPattern", async () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    await expect(tools.network_get_request.handler({ tabId: 7 } as any)).rejects.toThrow();
   });
 
   it("console_read returns an array of entries in the text content block", async () => {

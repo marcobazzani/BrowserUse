@@ -287,4 +287,27 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
     expect(scroll.params.mode).toBe("wheel");
     expect(scroll.params.dy).toBe(800);
   });
+
+  it("network_get_request is observational and returns headers+body over the real bridge", async () => {
+    const seen: string[] = [];
+    ws.removeAllListeners("message");
+    ws.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      seen.push(req.method);
+      const r: Record<string, unknown> = {
+        "network.getRequest": {
+          method: "POST", url: "https://x/api/graph", status: 500,
+          requestHeaders: { "x-a": "1" }, responseHeaders: { "content-type": "application/json" },
+          body: "{\"error\":\"boom\"}", base64Encoded: false, truncated: false,
+        },
+      };
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: r[req.method] }));
+    });
+    const tools = buildTools(server);
+    const result = await tools.network_get_request.handler({ tabId: 1, urlPattern: "/api/graph" });
+    expect(seen).toEqual(["network.getRequest"]); // no claim
+    const parsed = JSON.parse((result.content[0] as any).text);
+    expect(parsed.status).toBe(500);
+    expect(parsed.body).toContain("boom");
+  });
 });

@@ -149,6 +149,27 @@ describeE2E("end-to-end: extension in real Chromium ↔ real MCP server", () => 
     expect(parsed.matched).toBe(true);
   }, 20_000);
 
+  it("page_wait (text) resolves once delayed text appears", async () => {
+    const page = await ctx.newPage();
+    await page.goto("about:blank");
+    const tabId = await sw.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return tabs[0]!.id!;
+    });
+    await page.evaluate(() => {
+      setTimeout(() => {
+        const d = document.createElement("div");
+        d.textContent = "Payment complete";
+        document.body.appendChild(d);
+      }, 800);
+    });
+    const result = await mcpClient.callTool({
+      name: "page_wait",
+      arguments: { tabId, for: "text", text: "payment COMPLETE", timeoutMs: 5000 },
+    });
+    expect(JSON.parse(result.content[0]!.text).matched).toBe(true);
+  }, 20_000);
+
   it("page_wait (selector) times out for a selector that never appears", async () => {
     const page = await ctx.newPage();
     await page.goto("about:blank");
@@ -171,4 +192,34 @@ describeE2E("end-to-end: extension in real Chromium ↔ real MCP server", () => 
     const hasDownloads = await sw.evaluate(() => typeof chrome.downloads?.onCreated?.addListener === "function");
     expect(hasDownloads).toBe(true);
   }, 20_000);
+
+  it("page_snapshot since=last returns a diff after a DOM mutation", async () => {
+    const page = await ctx.newPage();
+    await page.goto("data:text/html,<button>Alpha</button>");
+    const tabId = await sw.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return tabs[0]!.id!;
+    });
+    // First since=last establishes the baseline (returns full + baseline=true).
+    const base = await mcpClient.callTool({
+      name: "page_snapshot",
+      arguments: { tabId, since: "last" },
+    });
+    expect(JSON.parse(base.content[0]!.text).baseline).toBe(true);
+    // Add a new button, then diff.
+    await page.evaluate(() => {
+      const b = document.createElement("button");
+      b.textContent = "Beta";
+      document.body.appendChild(b);
+    });
+    const diff = await mcpClient.callTool({
+      name: "page_snapshot",
+      arguments: { tabId, since: "last" },
+    });
+    const r = JSON.parse(diff.content[0]!.text);
+    expect(r.diff.added).toBeGreaterThanOrEqual(1);
+    expect(r.content).toContain("Beta");
+    // The unchanged Alpha button is not re-emitted.
+    expect(r.content).not.toContain("Alpha");
+  }, 30_000);
 });

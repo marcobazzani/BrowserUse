@@ -127,6 +127,61 @@ describe("DebuggerManager.onEvent", () => {
     expect(filtered).toHaveLength(1);
     expect(filtered[0]!.url).toBe("https://a.test/x");
   });
+
+  it("getRequestDetail returns headers/status + lazily fetched body for the newest match", async () => {
+    const m = new DebuggerManager();
+    await m.attach(1);
+    const sendSpy = (globalThis as any).chrome.debugger.sendCommand as ReturnType<typeof vi.fn>;
+    sendSpy.mockImplementation(async (_t: any, method: string, params: any) => {
+      if (method === "Network.getResponseBody") {
+        expect(params.requestId).toBe("r2"); // newest match
+        return { body: '{"error":"boom"}', base64Encoded: false };
+      }
+      return {};
+    });
+    m.onEvent({ tabId: 1 }, "Network.requestWillBeSent", {
+      requestId: "r1", request: { method: "GET", url: "https://api.test/graph", headers: { "x-a": "1" } }, type: "XHR",
+    });
+    m.onEvent({ tabId: 1 }, "Network.responseReceived", {
+      requestId: "r1", response: { status: 200, headers: { "content-type": "application/json" } },
+    });
+    m.onEvent({ tabId: 1 }, "Network.requestWillBeSent", {
+      requestId: "r2", request: { method: "POST", url: "https://api.test/graph", headers: { "x-b": "2" } }, type: "XHR",
+    });
+    m.onEvent({ tabId: 1 }, "Network.responseReceived", {
+      requestId: "r2", response: { status: 500, headers: { "content-type": "application/json" } },
+    });
+    const detail = await m.getRequestDetail(1, "api\\.test/graph", 200_000);
+    expect(detail.method).toBe("POST");
+    expect(detail.status).toBe(500);
+    expect(detail.requestHeaders["x-b"]).toBe("2");
+    expect(detail.responseHeaders["content-type"]).toBe("application/json");
+    expect(detail.body).toBe('{"error":"boom"}');
+    expect(detail.truncated).toBe(false);
+  });
+
+  it("getRequestDetail truncates the body to maxBytes", async () => {
+    const m = new DebuggerManager();
+    await m.attach(1);
+    const sendSpy = (globalThis as any).chrome.debugger.sendCommand as ReturnType<typeof vi.fn>;
+    sendSpy.mockImplementation(async (_t: any, method: string) => {
+      if (method === "Network.getResponseBody") return { body: "x".repeat(100), base64Encoded: false };
+      return {};
+    });
+    m.onEvent({ tabId: 1 }, "Network.requestWillBeSent", {
+      requestId: "r1", request: { method: "GET", url: "https://api.test/big" }, type: "XHR",
+    });
+    m.onEvent({ tabId: 1 }, "Network.responseReceived", { requestId: "r1", response: { status: 200 } });
+    const detail = await m.getRequestDetail(1, "big", 10);
+    expect(detail.body.length).toBe(10);
+    expect(detail.truncated).toBe(true);
+  });
+
+  it("getRequestDetail throws when nothing matches", async () => {
+    const m = new DebuggerManager();
+    await m.attach(1);
+    await expect(m.getRequestDetail(1, "nope", 100)).rejects.toThrow(/no buffered request/);
+  });
 });
 
 describe("DebuggerManager.onDetach", () => {

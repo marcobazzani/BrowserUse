@@ -34,6 +34,7 @@ import {
   ConsoleReadResultSchema,
   NetworkReadParamsSchema,
   NetworkReadResultSchema,
+  NetworkGetRequestParamsSchema,
 } from "../src/protocol.js";
 
 describe("protocol round-trip", () => {
@@ -110,6 +111,10 @@ describe("protocol round-trip", () => {
     expect(parsed.mode).toBe("a11y");
     expect(parsed.maxBytes).toBe(80_000);
     expect(parsed.includeBounds).toBe(false);
+    expect(parsed.since).toBe("full");
+  });
+  it("page.snapshot params accept since=last", () => {
+    expect(PageSnapshotParamsSchema.parse({ tabId: 1, since: "last" }).since).toBe("last");
   });
 
   it("page.snapshot params accept no tabId (active-tab fallback)", () => {
@@ -378,6 +383,16 @@ describe("protocol round-trip", () => {
     expect(NetworkReadResultSchema.parse(r)).toEqual(r);
   });
 
+  // --- network.getRequest ---
+  it("network.getRequest requires urlPattern, defaults maxBytes", () => {
+    const p = NetworkGetRequestParamsSchema.parse({ urlPattern: "/api/graph" });
+    expect(p.urlPattern).toBe("/api/graph");
+    expect(p.maxBytes).toBe(200_000);
+  });
+  it("network.getRequest rejects missing urlPattern", () => {
+    expect(() => NetworkGetRequestParamsSchema.parse({})).toThrow();
+  });
+
   // --- handle_dialog ---
   it("page.handleDialog defaults action=accept", () => {
     const p = PageHandleDialogParamsSchema.parse({ tabId: 1 });
@@ -494,6 +509,14 @@ describe("protocol round-trip", () => {
   it("page.wait loadstate accepts load/domcontentloaded/networkidle", () => {
     expect(PageWaitParamsSchema.parse({ tabId: 1, for: "loadstate", loadState: "networkidle" }).loadState).toBe("networkidle");
   });
+  it("page.wait text mode round-trips", () => {
+    const p = PageWaitParamsSchema.parse({ tabId: 1, for: "text", text: "Payment complete" });
+    expect(p.for).toBe("text");
+    expect(p.text).toBe("Payment complete");
+  });
+  it("page.wait text mode requires text", () => {
+    expect(() => PageWaitParamsSchema.parse({ tabId: 1, for: "text" })).toThrow();
+  });
 
   // --- waitForDownload ---
   it("page.waitForDownload defaults timeoutMs=30000", () => {
@@ -512,10 +535,17 @@ describe("protocol round-trip", () => {
   it("page.click defaults force=false", () => {
     expect(PageClickParamsSchema.parse({ tabId: 1, uid: "e1" }).force).toBe(false);
   });
+  it("page.click defaults timeoutMs=5000", () => {
+    expect(PageClickParamsSchema.parse({ tabId: 1, uid: "e1" }).timeoutMs).toBe(5_000);
+  });
   it("page.type defaults force=false and modifiers=[]", () => {
     const p = PageTypeParamsSchema.parse({ tabId: 1, uid: "e1", text: "hi" });
     expect(p.force).toBe(false);
     expect(p.modifiers).toEqual([]);
+    expect(p.timeoutMs).toBe(5_000);
+  });
+  it("page.navigate defaults timeoutMs=30000", () => {
+    expect(PageNavigateParamsSchema.parse({ tabId: 1, url: "https://x" }).timeoutMs).toBe(30_000);
   });
   it("page.type accepts modifiers for chords", () => {
     const p = PageTypeParamsSchema.parse({ tabId: 1, text: "a", modifiers: ["Control"] });
