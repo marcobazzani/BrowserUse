@@ -26,6 +26,8 @@ function fakeChrome() {
       commands: [] as any[],
       onEventListeners: [] as Array<(src: chrome.debugger.Debuggee, method: string, params: Record<string, unknown>) => void>,
       focusedTargetId: undefined as string | undefined,
+      // waitForActionable predicate result; default = actionable & stable.
+      actionable: { ok: true, x: 100, y: 100 } as Record<string, unknown>,
     },
   };
   (globalThis as any).chrome = {
@@ -132,6 +134,11 @@ function fakeChrome() {
           if (params?.functionDeclaration?.includes("page.select target") || params?.functionDeclaration?.includes("picked")) {
             return { result: { type: "object", value: ["opt1"] } };
           }
+          // waitForActionable predicate: returns { ok, x, y } / { ok:false, reason }.
+          // Honor a per-test override so we can simulate hidden/disabled elements.
+          if (params?.functionDeclaration?.includes("getBoundingClientRect") && params?.functionDeclaration?.includes("isConnected")) {
+            return { result: { type: "object", value: state.debuggerState.actionable } };
+          }
           // verifyFocus: JS in the page returns { matches, actualTag?, ... }.
           // Default to "focus took" so happy-path tests don't have to special-case it.
           if (params?.functionDeclaration?.includes("doc.activeElement") || params?.functionDeclaration?.includes("matches: true")) {
@@ -161,6 +168,29 @@ function fakeChrome() {
       }),
       onEvent: { addListener: vi.fn((listener) => state.debuggerState.onEventListeners.push(listener)) },
       onDetach: { addListener: vi.fn() },
+    },
+    downloads: {
+      _created: [] as Array<(item: any) => void>,
+      _changed: [] as Array<(delta: any) => void>,
+      _items: new Map<number, any>(),
+      onCreated: {
+        addListener: vi.fn((l: any) => { (globalThis as any).chrome.downloads._created.push(l); }),
+        removeListener: vi.fn((l: any) => {
+          const a = (globalThis as any).chrome.downloads._created;
+          const i = a.indexOf(l); if (i >= 0) a.splice(i, 1);
+        }),
+      },
+      onChanged: {
+        addListener: vi.fn((l: any) => { (globalThis as any).chrome.downloads._changed.push(l); }),
+        removeListener: vi.fn((l: any) => {
+          const a = (globalThis as any).chrome.downloads._changed;
+          const i = a.indexOf(l); if (i >= 0) a.splice(i, 1);
+        }),
+      },
+      search: vi.fn((q: { id: number }, cb: (items: any[]) => void) => {
+        const item = (globalThis as any).chrome.downloads._items.get(q.id);
+        cb(item ? [item] : []);
+      }),
     },
   };
   return state;
@@ -975,5 +1005,145 @@ describe("handlers", () => {
     expect(pressed.length).toBe(1);
     expect(moved.length).toBe(5);
     expect(released.length).toBe(1);
+  });
+
+  // --- actionability gate on click/type ---
+  it("page.click throws when the target is not actionable (hidden)", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.actionable = { ok: false, reason: "hidden" };
+    vi.useFakeTimers();
+    try {
+      const promise = d.handle({
+        jsonrpc: "2.0", id: 300, method: "page.click",
+        params: { tabId: 1, uid: uids[0] },
+      });
+      // Drive the poll loop past its 5s deadline.
+      await vi.advanceTimersByTimeAsync(5_200);
+      const resp = await promise;
+      expect(resp.error?.message).toMatch(/not actionable: hidden/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("page.click with force=true bypasses the actionability gate", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.actionable = { ok: false, reason: "hidden" };
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 301, method: "page.click",
+      params: { tabId: 1, uid: uids[0], force: true },
+    });
+    expect((resp.result as any).ok).toBe(true);
+  });
+
+  it("page.type with force=true types into a not-yet-actionable element", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.actionable = { ok: false, reason: "hidden" };
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 302, method: "page.type",
+      params: { tabId: 1, uid: uids[1], text: "hi", force: true },
+    });
+    expect((resp.result as any).ok).toBe(true);
+  });
+
+  // --- page.type modifiers (chords) ---
+  it("page.type with modifiers sets the modifier flag on dispatched keys", async () => {
+    const uids = await snapshotUids(1);
+    state.debuggerState.commands = [];
+    await d.handle({
+      jsonrpc: "2.0", id: 310, method: "page.type",
+      params: { tabId: 1, uid: uids[1], text: "a", modifiers: ["Control"], clear: false },
+    });
+    const keys = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchKeyEvent" && c.params.code === "KeyA");
+    expect(keys.length).toBeGreaterThan(0);
+    // Control flag = 2.
+    expect(keys[0].params.modifiers).toBe(2);
+  });
+
+  // --- page.scroll wheel mode ---
+  it("page.scroll wheel mode dispatches a mouseWheel event with the deltas", async () => {
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 320, method: "page.scroll",
+      params: { tabId: 1, mode: "wheel", dy: 500 },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    const wheel = state.debuggerState.commands.filter((c: any) => c.method === "Input.dispatchMouseEvent" && c.params.type === "mouseWheel");
+    expect(wheel.length).toBe(1);
+    expect(wheel[0].params.deltaY).toBe(500);
+  });
+
+  // --- page.paste ---
+  it("page.paste writes to clipboard and dispatches a paste key with a modifier", async () => {
+    state.debuggerState.commands = [];
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 330, method: "page.paste",
+      params: { tabId: 1, text: "Alice\t30\nBob\t25" },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    expect((resp.result as any).bytesWritten).toBe("Alice\t30\nBob\t25".length);
+    const clip = state.debuggerState.commands.filter(
+      (c: any) => c.method === "Runtime.evaluate" &&
+        typeof c.params?.expression === "string" &&
+        c.params.expression.includes("clipboard"),
+    );
+    expect(clip.length).toBeGreaterThan(0);
+    const vKeys = state.debuggerState.commands.filter(
+      (c: any) => c.method === "Input.dispatchKeyEvent" && c.params.code === "KeyV",
+    );
+    expect(vKeys.length).toBe(2); // keyDown + keyUp
+    expect(vKeys[0].params.modifiers).toBeGreaterThan(0);
+  });
+
+  // --- page.wait ---
+  it("page.wait function mode resolves when the expression becomes truthy", async () => {
+    // Use the default Runtime.evaluate fake (returns truthy "ok") so it resolves immediately.
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 340, method: "page.wait",
+      params: { tabId: 1, for: "function", expression: "true", timeoutMs: 500, pollMs: 50 },
+    });
+    expect((resp.result as any).ok).toBe(true);
+    expect((resp.result as any).matched).toBe(true);
+  });
+
+  it("page.wait selector mode times out when the element never appears", async () => {
+    const resp = await d.handle({
+      jsonrpc: "2.0", id: 341, method: "page.wait",
+      params: { tabId: 1, for: "selector", selector: "#never", timeoutMs: 150, pollMs: 50 },
+    });
+    expect(resp.error?.message).toMatch(/timed out/);
+  });
+
+  // --- page.waitForDownload (observational) ---
+  it("page.waitForDownload resolves on a completed download armed after the call", async () => {
+    const downloads = (globalThis as any).chrome.downloads;
+    const promise = d.handle({
+      jsonrpc: "2.0", id: 350, method: "page.waitForDownload",
+      params: { timeoutMs: 1000 },
+    });
+    // Simulate Chrome creating then completing a download AFTER we armed.
+    await Promise.resolve();
+    const item = { id: 42, filename: "/Users/me/Downloads/export.xlsx", fileSize: 2048, mime: "application/x", finalUrl: "https://x/export", url: "https://x/export", state: "complete" };
+    downloads._items.set(42, item);
+    for (const l of downloads._created) l(item);
+    for (const l of downloads._changed) l({ id: 42, state: { current: "complete" } });
+    const resp = await promise;
+    expect((resp.result as any).filename).toBe("export.xlsx");
+    expect((resp.result as any).path).toBe("/Users/me/Downloads/export.xlsx");
+    expect((resp.result as any).bytes).toBe(2048);
+  });
+
+  it("page.waitForDownload ignores downloads it didn't see created (pre-existing history)", async () => {
+    const downloads = (globalThis as any).chrome.downloads;
+    const promise = d.handle({
+      jsonrpc: "2.0", id: 351, method: "page.waitForDownload",
+      params: { timeoutMs: 200 },
+    });
+    await Promise.resolve();
+    // A completed download whose id was NEVER announced via onCreated → must be ignored.
+    downloads._items.set(7, { id: 7, filename: "/Users/me/Downloads/old.pdf", fileSize: 10, state: "complete" });
+    for (const l of downloads._changed) l({ id: 7, state: { current: "complete" } });
+    const resp = await promise;
+    expect(resp.error?.message).toMatch(/timed out/);
   });
 });

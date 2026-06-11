@@ -141,6 +141,8 @@ export const PageClickParamsSchema = z
     selector: z.string().min(1).optional(),
     button: z.enum(["left", "right", "middle"]).default("left"),
     scrollIntoView: z.boolean().default(true),
+    /** Skip the actionability gate (visible/stable/enabled) before clicking. */
+    force: z.boolean().default(false),
     includeSnapshot: z.boolean().default(false),
   })
   .strict()
@@ -171,6 +173,10 @@ export const PageTypeParamsSchema = z
     submit: z.boolean().default(false),
     clear: z.boolean().default(true),
     requireEmpty: z.boolean().default(false),
+    /** Modifiers held down for the whole text run — use for chords (e.g. Control+a). */
+    modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).default([]),
+    /** Skip the actionability gate (visible/stable/enabled) before typing. */
+    force: z.boolean().default(false),
     includeSnapshot: z.boolean().default(false),
   })
   .strict();
@@ -185,12 +191,26 @@ export const PageScrollParamsSchema = z
     dx: z.number().optional(),
     dy: z.number().optional(),
     selector: z.string().min(1).optional(),
+    uid: z.string().min(1).optional(),
     to: z.enum(["top", "bottom"]).optional(),
+    /**
+     * "js" (default): scrollIntoView/scrollTo/scrollBy — preserves prior behaviour.
+     * "wheel": dispatch a real mouseWheel event so virtualized grids (Excel's
+     * canvas) lazy-load rows. Anchors at the uid/selector centre, else viewport centre.
+     */
+    mode: z.enum(["js", "wheel"]).default("js"),
     smooth: z.boolean().default(false),
     includeSnapshot: z.boolean().default(false),
   })
   .strict()
   .superRefine((v, ctx) => {
+    if (v.mode === "wheel") {
+      // Wheel mode needs a delta; an optional uid/selector just anchors the cursor.
+      if (v.dx === undefined && v.dy === undefined) {
+        ctx.addIssue({ code: "custom", message: "wheel mode requires dx and/or dy" });
+      }
+      return;
+    }
     const count = [v.dx !== undefined || v.dy !== undefined, v.selector !== undefined, v.to !== undefined]
       .filter(Boolean).length;
     if (count === 0) {
@@ -203,6 +223,113 @@ export const PageScrollParamsSchema = z
 export const PageScrollResultSchema = z.object({
   ok: z.literal(true),
   snapshot: z.string().optional(),
+}).strict();
+
+/* ---------- Paste (clipboard → Cmd/Ctrl+V) ---------- */
+
+/**
+ * Write `text` to the OS clipboard and synthesize a paste keystroke at the
+ * current/specified focus. The reliable primitive for bulk grid fill —
+ * Excel for the Web and Google Sheets parse pasted TSV/CSV deterministically
+ * (Tab → next cell, newline → next row). No keystroke timing races, no
+ * per-cell anchors.
+ *
+ * target:
+ *  - "current" (default): paste at whatever has document focus.
+ *  - "uid": resolve the uid (preferred), focus it (auto-verifying), then paste.
+ *  - "xy": coordinate-click at (x, y) first to set focus, then paste.
+ */
+export const PagePasteParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    text: z.string().min(1),
+    target: z.enum(["current", "uid", "xy"]).default("current"),
+    uid: z.string().min(1).optional(),
+    selector: z.string().min(1).optional(),
+    x: z.number().min(0).optional(),
+    y: z.number().min(0).optional(),
+    includeSnapshot: z.boolean().default(false),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (v.target === "uid" && !v.uid && !v.selector) {
+      ctx.addIssue({ code: "custom", message: "target=uid requires uid or selector" });
+    }
+    if (v.target === "xy" && (v.x === undefined || v.y === undefined)) {
+      ctx.addIssue({ code: "custom", message: "target=xy requires x and y" });
+    }
+  });
+export const PagePasteResultSchema = z.object({
+  ok: z.literal(true),
+  /** Number of bytes (text length) written to the clipboard. */
+  bytesWritten: z.number().int(),
+  snapshot: z.string().optional(),
+}).strict();
+
+/* ---------- Wait (uid / selector / function / response / loadstate) ---------- */
+
+/**
+ * Explicit waiting primitive. uid mode is preferred (matches the a11y-snapshot
+ * flow and works inside OOPIFs); selector is a main-frame-only fallback.
+ * response mode is observational — it only matches requests that appear AFTER
+ * the wait is armed (the MCP wrapper does not claim the tab for response mode).
+ */
+export const PageWaitParamsSchema = z
+  .object({
+    tabId: z.number().int(),
+    for: z.enum(["uid", "selector", "function", "response", "loadstate"]),
+    // uid mode (preferred) — a uid from the most recent snapshot
+    uid: z.string().min(1).optional(),
+    // selector mode (fallback, main-frame only)
+    selector: z.string().min(1).optional(),
+    state: z.enum(["attached", "visible", "hidden", "detached"]).default("visible"),
+    // function mode — JS expression that must evaluate truthy
+    expression: z.string().min(1).optional(),
+    // response mode — regex tested against request URL in the network buffer
+    urlPattern: z.string().min(1).optional(),
+    // loadstate mode
+    loadState: z.enum(["load", "domcontentloaded", "networkidle"]).default("load"),
+    pollMs: z.number().int().min(50).max(2_000).default(150),
+    timeoutMs: z.number().int().positive().max(120_000).default(10_000),
+    includeSnapshot: z.boolean().default(false),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (v.for === "uid" && !v.uid) ctx.addIssue({ code: "custom", message: "for=uid requires uid" });
+    if (v.for === "selector" && !v.selector) ctx.addIssue({ code: "custom", message: "for=selector requires selector" });
+    if (v.for === "function" && !v.expression) ctx.addIssue({ code: "custom", message: "for=function requires expression" });
+    if (v.for === "response" && !v.urlPattern) ctx.addIssue({ code: "custom", message: "for=response requires urlPattern" });
+  });
+export const PageWaitResultSchema = z.object({
+  ok: z.literal(true),
+  matched: z.boolean(),
+  waitedMs: z.number(),
+  snapshot: z.string().optional(),
+}).strict();
+
+/* ---------- Wait for download (observational) ---------- */
+
+/**
+ * Resolve with metadata of the next download that COMPLETES after this wait
+ * is armed. Uses chrome.downloads — the file lands wherever the user's Chrome
+ * already puts it; we never redirect (no Page.setDownloadBehavior) and never
+ * enumerate history (no chrome.downloads.search baseline). Observational: the
+ * MCP wrapper does not claim a tab for this tool.
+ */
+export const PageWaitForDownloadParamsSchema = z
+  .object({
+    timeoutMs: z.number().int().positive().max(300_000).default(30_000),
+    // Optional regex tested against the download's filename.
+    filenamePattern: z.string().min(1).optional(),
+  })
+  .strict();
+export const PageWaitForDownloadResultSchema = z.object({
+  ok: z.literal(true),
+  filename: z.string(),
+  path: z.string(),
+  bytes: z.number().int().optional(),
+  mime: z.string().optional(),
+  finalUrl: z.string().optional(),
 }).strict();
 
 /* ---------- Hover ---------- */
@@ -560,7 +687,10 @@ export const METHODS = {
   "page.screenshot": { params: PageScreenshotParamsSchema, result: PageScreenshotResultSchema },
   "page.click":      { params: PageClickParamsSchema,      result: PageClickResultSchema },
   "page.type":       { params: PageTypeParamsSchema,       result: PageTypeResultSchema },
+  "page.paste":      { params: PagePasteParamsSchema,      result: PagePasteResultSchema },
   "page.scroll":     { params: PageScrollParamsSchema,     result: PageScrollResultSchema },
+  "page.wait":       { params: PageWaitParamsSchema,       result: PageWaitResultSchema },
+  "page.waitForDownload": { params: PageWaitForDownloadParamsSchema, result: PageWaitForDownloadResultSchema },
   "page.hover":      { params: PageHoverParamsSchema,      result: PageHoverResultSchema },
   "page.focus":      { params: PageFocusParamsSchema,      result: PageFocusResultSchema },
   "page.clickXy":    { params: PageClickXyParamsSchema,    result: PageClickXyResultSchema },

@@ -14,6 +14,7 @@ import {
   PageFocusParamsSchema,
   PageClickXyParamsSchema,
   PageFocusStateParamsSchema,
+  PagePasteParamsSchema,
 } from "@chromanche/shared";
 import { resolveUid } from "../lib/snapshot-manager.js";
 import { takeA11ySnapshot } from "./page-read.js";
@@ -260,6 +261,66 @@ async function focusAuto(
   await coordinateClick(mgr, tabId, el.objectId, el.targetId);
   v = await verifyFocus(mgr, tabId, el);
   return { focused: v.matches, modeUsed: "click", actual: v.matches ? undefined : v };
+}
+
+/* ---------- Actionability gate ---------- */
+
+/**
+ * A human doesn't click a control that's still spinning in, mid-animation, or
+ * disabled — they wait the half-second until it's real. waitForActionable
+ * mirrors that: poll (≤ timeoutMs) until the element is connected, has a
+ * non-zero box, isn't visibility:hidden / display:none, isn't disabled /
+ * aria-disabled, and has a stable position across two samples (catches
+ * mid-animation). Runs in the element's own session, so it works inside
+ * OOPIFs (Excel / Office addin frames).
+ */
+interface ActionableState {
+  actionable: boolean;
+  reason?: string;
+}
+
+export async function waitForActionable(
+  mgr: DebuggerManager,
+  tabId: number,
+  el: ResolvedElement,
+  timeoutMs = 5_000,
+): Promise<ActionableState> {
+  const deadline = Date.now() + timeoutMs;
+  let last: { x: number; y: number } | undefined;
+  let lastReason = "not-ready";
+  for (;;) {
+    const r = await mgr.sendCommand<{ result: { value: { ok: boolean; reason?: string; x?: number; y?: number } } }>(
+      tabId,
+      "Runtime.callFunctionOn",
+      {
+        objectId: el.objectId,
+        functionDeclaration: `function() {
+          if (!this.isConnected) return { ok:false, reason:"detached" };
+          const r = this.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) return { ok:false, reason:"zero-size" };
+          const cs = getComputedStyle(this);
+          if (cs.visibility === "hidden" || cs.display === "none") return { ok:false, reason:"hidden" };
+          if (this.disabled || this.getAttribute("aria-disabled") === "true") return { ok:false, reason:"disabled" };
+          return { ok:true, x:r.x, y:r.y };
+        }`,
+        returnByValue: true,
+      },
+      el.targetId,
+    );
+    const v = r.result.value;
+    if (v.ok) {
+      // Require positional stability across two samples to avoid acting mid-animation.
+      if (last && Math.abs(last.x - (v.x ?? 0)) <= 1 && Math.abs(last.y - (v.y ?? 0)) <= 1) {
+        return { actionable: true };
+      }
+      last = { x: v.x ?? 0, y: v.y ?? 0 };
+    } else {
+      lastReason = v.reason ?? "not-ready";
+      last = undefined;
+    }
+    if (Date.now() >= deadline) return { actionable: false, reason: lastReason };
+    await new Promise((res) => setTimeout(res, 60));
+  }
 }
 
 // In-page scroll function (self-contained, no closures).
@@ -632,6 +693,16 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
   d.register("page.click", async (raw) => {
     const p = PageClickParamsSchema.parse(raw);
     const el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
+    if (!p.force) {
+      const act = await waitForActionable(mgr, p.tabId, el);
+      if (!act.actionable) {
+        throw new Error(
+          `page.click target not actionable: ${act.reason}. ` +
+          `The element isn't ready (hidden/disabled/animating/detached). ` +
+          `Wait for it (page_wait) or pass force=true to click anyway.`,
+        );
+      }
+    }
     const { x, y } = await getElementCenter(mgr, p.tabId, el.objectId, el.targetId);
     const btn = p.button === "right" ? 2 : p.button === "middle" ? 1 : 0;
     const btnName = p.button === "right" ? "right" : p.button === "middle" ? "middle" : "left";
@@ -678,8 +749,9 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
       try {
         const targetId = await focusedKeyboardTarget(mgr, p.tabId);
         if (p.requireEmpty) await assertEmptyFocusTarget(mgr, p.tabId, targetId);
+        const mods = modifierFlags(p.modifiers);
         for (const ch of p.text) {
-          await dispatchKey(mgr, p.tabId, charToKeyDef(ch), 0, targetId);
+          await dispatchKey(mgr, p.tabId, charToKeyDef(ch), mods, targetId);
         }
       } catch (e) {
         throw translateCdpError(e);
@@ -693,6 +765,17 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
       el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
     } catch (e) {
       throw translateCdpError(e);
+    }
+
+    if (!p.force) {
+      const act = await waitForActionable(mgr, p.tabId, el);
+      if (!act.actionable) {
+        throw new Error(
+          `page.type target not actionable: ${act.reason}. ` +
+          `The element isn't ready (hidden/disabled/animating/detached). ` +
+          `Wait for it (page_wait) or pass force=true to type anyway.`,
+        );
+      }
     }
 
     // Self-verifying focus: JS focus → verify → escalate to coordinate-click
@@ -747,7 +830,7 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     // Real keystrokes work in both standard inputs and these custom surfaces.
     try {
       for (const ch of p.text) {
-        await dispatchKey(mgr, p.tabId, charToKeyDef(ch), 0, el.targetId);
+        await dispatchKey(mgr, p.tabId, charToKeyDef(ch), modifierFlags(p.modifiers), el.targetId);
       }
     } catch (e) {
       throw translateCdpError(e);
@@ -765,8 +848,101 @@ export function registerPageInteractHandlers(d: Dispatcher, mgr: DebuggerManager
     return { ok: true as const, snapshot };
   });
 
+  d.register("page.paste", async (raw) => {
+    const p = PagePasteParamsSchema.parse(raw);
+
+    // 1. Set focus on the desired target (current / uid / xy).
+    let el: ResolvedElement | undefined;
+    if (p.target === "uid") {
+      el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
+      const out = await focusAuto(mgr, p.tabId, el);
+      if (!out.focused) {
+        const a = out.actual!;
+        throw new Error(
+          `page.paste couldn't focus uid target — activeElement is <${a.actualTag} role="${a.actualRole ?? ""}" name="${a.actualName ?? ""}">.`,
+        );
+      }
+    } else if (p.target === "xy") {
+      await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
+        type: "mousePressed", x: p.x!, y: p.y!, button: "left", buttons: 1, clickCount: 1,
+      });
+      await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
+        type: "mouseReleased", x: p.x!, y: p.y!, button: "left", buttons: 0, clickCount: 1,
+      });
+    }
+    // For target=current we paste wherever document.activeElement currently is.
+
+    const targetId = el?.targetId;
+
+    // 2. Write text to the clipboard. navigator.clipboard.writeText needs a
+    //    transient user activation, which a prior coordinate-click provides;
+    //    fall back to the legacy execCommand path otherwise.
+    try {
+      const r = await mgr.sendCommand<{ result: { value?: boolean } }>(p.tabId, "Runtime.evaluate", {
+        expression: `(async () => {
+          try { await navigator.clipboard.writeText(${JSON.stringify(p.text)}); return true; }
+          catch (e) { return false; }
+        })()`,
+        awaitPromise: true,
+        returnByValue: true,
+      }, targetId);
+      if (r.result.value !== true) throw new Error("clipboard API refused");
+    } catch {
+      await mgr.sendCommand(p.tabId, "Runtime.evaluate", {
+        expression: `(function(t){
+          const ta = document.createElement('textarea');
+          ta.value = t; ta.style.position='fixed'; ta.style.opacity='0';
+          document.body.appendChild(ta); ta.focus(); ta.select();
+          try { document.execCommand('copy'); } finally { ta.remove(); }
+        })(${JSON.stringify(p.text)})`,
+        returnByValue: true,
+      }, targetId);
+    }
+
+    // 3. Dispatch Cmd+V on macOS, Ctrl+V elsewhere. modifier flag 4 = Meta, 2 = Control.
+    const plat = await mgr.sendCommand<{ result: { value: string } }>(p.tabId, "Runtime.evaluate", {
+      expression: "navigator.platform || ''",
+      returnByValue: true,
+    });
+    const isMac = /Mac|iPhone|iPad/.test(plat.result.value);
+    const modifiers = isMac ? 4 : 2;
+    // No `text` field — modifiers are non-zero, so we don't want a literal "v" inserted.
+    await dispatchKey(mgr, p.tabId, { key: "v", code: "KeyV", keyCode: 86 }, modifiers, targetId);
+
+    const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
+    return { ok: true as const, bytesWritten: p.text.length, snapshot };
+  });
+
   d.register("page.scroll", async (raw) => {
     const p = PageScrollParamsSchema.parse(raw);
+
+    if (p.mode === "wheel") {
+      // Real wheel event so virtualized grids (Excel canvas) lazy-load rows.
+      // Anchor the cursor at the uid/selector centre when given, else viewport centre.
+      let x: number;
+      let y: number;
+      let targetId: string | undefined;
+      if (p.uid || p.selector) {
+        const el = await resolveElement(mgr, p.tabId, p.uid, p.selector);
+        const c = await getElementCenter(mgr, p.tabId, el.objectId, el.targetId);
+        x = c.x;
+        y = c.y;
+        targetId = el.targetId;
+      } else {
+        const [{ result: vp }] = await chrome.scripting.executeScript({
+          target: { tabId: p.tabId },
+          func: () => ({ w: window.innerWidth, h: window.innerHeight }),
+        });
+        x = Math.floor((vp as { w: number }).w / 2);
+        y = Math.floor((vp as { h: number }).h / 2);
+      }
+      await mgr.sendCommand(p.tabId, "Input.dispatchMouseEvent", {
+        type: "mouseWheel", x, y, deltaX: p.dx ?? 0, deltaY: p.dy ?? 0,
+      }, targetId);
+      const snapshot = await maybeSnapshot(mgr, p.tabId, p.includeSnapshot);
+      return { ok: true as const, snapshot };
+    }
+
     const [entry] = await chrome.scripting.executeScript({
       target: { tabId: p.tabId },
       func: inPageScroll,

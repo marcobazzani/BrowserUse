@@ -13,6 +13,9 @@ import {
   PageClickParamsSchema,
   PageTypeParamsSchema,
   PageScrollParamsSchema,
+  PagePasteParamsSchema,
+  PageWaitParamsSchema,
+  PageWaitForDownloadParamsSchema,
   PageHoverParamsSchema,
   PageFocusParamsSchema,
   PageFocusResultSchema,
@@ -447,5 +450,88 @@ describe("protocol round-trip", () => {
   });
   it("page.fetch rejects timeoutMs > 60000", () => {
     expect(() => PageFetchParamsSchema.parse({ url: "/api", timeoutMs: 999999 })).toThrow();
+  });
+
+  // --- paste ---
+  it("page.paste accepts text + tabId, defaults target=current", () => {
+    const p = PagePasteParamsSchema.parse({ tabId: 1, text: "Alice\t30\nBob\t25" });
+    expect(p.target).toBe("current");
+    expect(p.text).toContain("Alice");
+  });
+  it("page.paste accepts target=uid with a uid", () => {
+    const p = PagePasteParamsSchema.parse({ tabId: 1, text: "x", target: "uid", uid: "e5" });
+    expect(p.target).toBe("uid");
+  });
+  it("page.paste rejects target=uid without uid", () => {
+    expect(() => PagePasteParamsSchema.parse({ tabId: 1, text: "x", target: "uid" })).toThrow();
+  });
+  it("page.paste rejects target=xy without coordinates", () => {
+    expect(() => PagePasteParamsSchema.parse({ tabId: 1, text: "x", target: "xy" })).toThrow();
+  });
+  it("page.paste rejects empty text", () => {
+    expect(() => PagePasteParamsSchema.parse({ tabId: 1, text: "" })).toThrow();
+  });
+
+  // --- wait ---
+  it("page.wait uid mode round-trips with default state=visible", () => {
+    const p = PageWaitParamsSchema.parse({ tabId: 1, for: "uid", uid: "e7" });
+    expect(p.for).toBe("uid");
+    expect(p.state).toBe("visible");
+    expect(p.timeoutMs).toBe(10_000);
+  });
+  it("page.wait uid mode requires uid", () => {
+    expect(() => PageWaitParamsSchema.parse({ tabId: 1, for: "uid" })).toThrow();
+  });
+  it("page.wait selector mode round-trips (fallback path)", () => {
+    expect(PageWaitParamsSchema.parse({ tabId: 1, for: "selector", selector: "#ok" }).selector).toBe("#ok");
+  });
+  it("page.wait function mode requires expression", () => {
+    expect(() => PageWaitParamsSchema.parse({ tabId: 1, for: "function" })).toThrow();
+  });
+  it("page.wait response mode requires urlPattern", () => {
+    expect(() => PageWaitParamsSchema.parse({ tabId: 1, for: "response" })).toThrow();
+  });
+  it("page.wait loadstate accepts load/domcontentloaded/networkidle", () => {
+    expect(PageWaitParamsSchema.parse({ tabId: 1, for: "loadstate", loadState: "networkidle" }).loadState).toBe("networkidle");
+  });
+
+  // --- waitForDownload ---
+  it("page.waitForDownload defaults timeoutMs=30000", () => {
+    const p = PageWaitForDownloadParamsSchema.parse({});
+    expect(p.timeoutMs).toBe(30_000);
+  });
+  it("page.waitForDownload accepts a filenamePattern", () => {
+    const p = PageWaitForDownloadParamsSchema.parse({ filenamePattern: "\\.xlsx$" });
+    expect(p.filenamePattern).toBe("\\.xlsx$");
+  });
+  it("page.waitForDownload rejects timeoutMs > 300000", () => {
+    expect(() => PageWaitForDownloadParamsSchema.parse({ timeoutMs: 999_999 })).toThrow();
+  });
+
+  // --- click/type force + type modifiers ---
+  it("page.click defaults force=false", () => {
+    expect(PageClickParamsSchema.parse({ tabId: 1, uid: "e1" }).force).toBe(false);
+  });
+  it("page.type defaults force=false and modifiers=[]", () => {
+    const p = PageTypeParamsSchema.parse({ tabId: 1, uid: "e1", text: "hi" });
+    expect(p.force).toBe(false);
+    expect(p.modifiers).toEqual([]);
+  });
+  it("page.type accepts modifiers for chords", () => {
+    const p = PageTypeParamsSchema.parse({ tabId: 1, text: "a", modifiers: ["Control"] });
+    expect(p.modifiers).toEqual(["Control"]);
+  });
+
+  // --- scroll wheel mode ---
+  it("page.scroll defaults mode=js", () => {
+    expect(PageScrollParamsSchema.parse({ tabId: 1, to: "bottom" }).mode).toBe("js");
+  });
+  it("page.scroll wheel mode round-trips with dx/dy + uid anchor", () => {
+    const p = PageScrollParamsSchema.parse({ tabId: 1, mode: "wheel", dy: 400, uid: "e9" });
+    expect(p.mode).toBe("wheel");
+    expect(p.dy).toBe(400);
+  });
+  it("page.scroll wheel mode rejects missing deltas", () => {
+    expect(() => PageScrollParamsSchema.parse({ tabId: 1, mode: "wheel" })).toThrow();
   });
 });

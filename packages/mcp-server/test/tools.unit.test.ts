@@ -24,7 +24,10 @@ const fakeBridge = () => {
         if (method === "page.click")      return { ok: true };
         if (method === "page.clickXy")    return { ok: true };
         if (method === "page.type")       return { ok: true };
+        if (method === "page.paste")       return { ok: true, bytesWritten: ((params as any)?.text ?? "").length };
         if (method === "page.scroll")     return { ok: true };
+        if (method === "page.wait")        return { ok: true, matched: true, waitedMs: 12 };
+        if (method === "page.waitForDownload") return { ok: true, filename: "export.xlsx", path: "/Users/me/Downloads/export.xlsx", bytes: 2048, mime: "application/vnd...", finalUrl: "https://x/export" };
         if (method === "page.hover")      return { ok: true };
         if (method === "page.focus")      return { ok: true, focused: true, modeUsed: (params as any)?.mode === "auto" || !(params as any)?.mode ? "js" : (params as any).mode };
         if (method === "page.pressKey")   return { ok: true };
@@ -182,6 +185,65 @@ describe("tool adapters", () => {
     const { bridge } = fakeBridge();
     const tools = buildTools(bridge);
     await expect(tools.page_scroll.handler({ tabId: 7 } as any)).rejects.toThrow();
+  });
+
+  it("page_scroll wheel mode forwards dx/dy", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_scroll.handler({ tabId: 7, mode: "wheel", dy: 600 });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.scroll"]);
+    expect((calls[1]!.params as any).mode).toBe("wheel");
+    expect((calls[1]!.params as any).dy).toBe(600);
+  });
+
+  it("page_paste auto-claims and forwards text + target", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_paste.handler({ tabId: 5, text: "Alice\t30\nBob\t25", target: "current" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.paste"]);
+    expect((calls[1]!.params as any).text).toContain("Alice");
+  });
+
+  it("page_paste composes inside page_batch", async () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    const r = await tools.page_batch.handler({
+      steps: [
+        { tool: "page_click_xy", args: { tabId: 1, x: 75, y: 156 } },
+        { tool: "page_paste",    args: { tabId: 1, text: "x\ty\nz\tw" } },
+      ],
+    });
+    const parsed = JSON.parse((r.content[0] as any).text);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.results.map((s: any) => s.tool)).toEqual(["page_click_xy", "page_paste"]);
+  });
+
+  it("page_wait uid mode claims then forwards", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_wait.handler({ tabId: 7, for: "uid", uid: "e7" });
+    expect(calls.map(c => c.method)).toEqual(["session.claim", "page.wait"]);
+  });
+
+  it("page_wait response mode is observational — does NOT claim", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    await tools.page_wait.handler({ tabId: 7, for: "response", urlPattern: "/api/save" });
+    expect(calls.map(c => c.method)).toEqual(["page.wait"]);
+  });
+
+  it("page_wait rejects function mode without expression", async () => {
+    const { bridge } = fakeBridge();
+    const tools = buildTools(bridge);
+    await expect(tools.page_wait.handler({ tabId: 7, for: "function" } as any)).rejects.toThrow();
+  });
+
+  it("page_wait_for_download is observational — does NOT claim", async () => {
+    const { bridge, calls } = fakeBridge();
+    const tools = buildTools(bridge);
+    const r = await tools.page_wait_for_download.handler({ timeoutMs: 5000 } as any);
+    expect(calls.map(c => c.method)).toEqual(["page.waitForDownload"]);
+    expect(JSON.parse((r.content[0] as any).text).filename).toBe("export.xlsx");
   });
 
   it("page_hover auto-claims and forwards uid", async () => {

@@ -14,7 +14,8 @@
     "debugger",
     "storage",
     "alarms",
-    "identity"
+    "identity",
+    "downloads"
   ],
   "host_permissions": [
     "<all_urls>"

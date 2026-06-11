@@ -196,4 +196,95 @@ describe("server end-to-end (no stdio transport; tools driven directly)", () => 
     // The third step ran even though the second failed.
     expect(seen).toContain("page.screenshot");
   });
+
+  it("page_paste auto-claims then pastes over the real bridge", async () => {
+    const seen: string[] = [];
+    ws.removeAllListeners("message");
+    ws.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      seen.push(req.method);
+      const r: Record<string, unknown> = {
+        "session.claim": { ok: true, groupId: 5 },
+        "page.paste": { ok: true, bytesWritten: ((req.params?.text as string) ?? "").length },
+      };
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: r[req.method] }));
+    });
+    const tools = buildTools(server);
+    const result = await tools.page_paste.handler({ tabId: 1, text: "Alice\t30\nBob\t25" });
+    expect(seen).toEqual(["session.claim", "page.paste"]);
+    expect(JSON.parse((result.content[0] as any).text).bytesWritten).toBe("Alice\t30\nBob\t25".length);
+  });
+
+  it("page_wait (uid) claims then waits over the real bridge", async () => {
+    const seen: string[] = [];
+    ws.removeAllListeners("message");
+    ws.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      seen.push(req.method);
+      const r: Record<string, unknown> = {
+        "session.claim": { ok: true, groupId: 5 },
+        "page.wait": { ok: true, matched: true, waitedMs: 42 },
+      };
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: r[req.method] }));
+    });
+    const tools = buildTools(server);
+    const result = await tools.page_wait.handler({ tabId: 1, for: "uid", uid: "e9" });
+    expect(seen).toEqual(["session.claim", "page.wait"]);
+    expect(JSON.parse((result.content[0] as any).text).matched).toBe(true);
+  });
+
+  it("page_wait (response) is observational — never claims the tab", async () => {
+    const seen: string[] = [];
+    ws.removeAllListeners("message");
+    ws.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      seen.push(req.method);
+      const r: Record<string, unknown> = {
+        "page.wait": { ok: true, matched: true, waitedMs: 7 },
+      };
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: r[req.method] }));
+    });
+    const tools = buildTools(server);
+    await tools.page_wait.handler({ tabId: 1, for: "response", urlPattern: "/api/save" });
+    expect(seen).toEqual(["page.wait"]);
+  });
+
+  it("page_wait_for_download is observational and returns the real path", async () => {
+    const seen: string[] = [];
+    ws.removeAllListeners("message");
+    ws.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      seen.push(req.method);
+      const r: Record<string, unknown> = {
+        "page.waitForDownload": {
+          ok: true, filename: "export.xlsx",
+          path: "/Users/me/Downloads/export.xlsx", bytes: 2048, mime: "x", finalUrl: "https://x",
+        },
+      };
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: r[req.method] }));
+    });
+    const tools = buildTools(server);
+    const result = await tools.page_wait_for_download.handler({ timeoutMs: 5000 } as any);
+    expect(seen).toEqual(["page.waitForDownload"]);
+    expect(JSON.parse((result.content[0] as any).text).path).toBe("/Users/me/Downloads/export.xlsx");
+  });
+
+  it("page_scroll wheel mode forwards the wheel deltas over the real bridge", async () => {
+    const seen: Array<{ method: string; params: any }> = [];
+    ws.removeAllListeners("message");
+    ws.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      seen.push({ method: req.method, params: req.params });
+      const r: Record<string, unknown> = {
+        "session.claim": { ok: true, groupId: 5 },
+        "page.scroll": { ok: true },
+      };
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: r[req.method] }));
+    });
+    const tools = buildTools(server);
+    await tools.page_scroll.handler({ tabId: 1, mode: "wheel", dy: 800 });
+    const scroll = seen.find((s) => s.method === "page.scroll")!;
+    expect(scroll.params.mode).toBe("wheel");
+    expect(scroll.params.dy).toBe(800);
+  });
 });

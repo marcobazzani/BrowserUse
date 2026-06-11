@@ -10,11 +10,12 @@ Lets any MCP-capable coding agent drive your real, logged-in Chrome through a lo
 
 ## What you get
 
-MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket. Current set (v0.11.0, 27 tools):
+MCP tools exposed over stdio, relayed to the extension over a localhost WebSocket. Current set (v0.11.0, 30 tools):
 
 - **Tabs:** `tabs_list`, `tabs_create`, `tabs_close`, `tabs_activate`
 - **Navigation & read:** `page_navigate`, `page_snapshot` (uid-annotated a11y tree / text / dom, optional bounds), `page_screenshot` (returns MCP image content + viewport metadata for vision-driven flows)
-- **Interact:** `page_click`, `page_click_xy` (vision-driven coordinate click, optional double-click), `page_type`, `page_focus` (loud focus reset for SPAs that grab focus), `page_focus_state` (inspect current focus), `page_hover`, `page_press_key`, `page_scroll`, `page_fill_form`, `page_select`, `page_upload_file`, `page_drag`, `page_handle_dialog`
+- **Interact:** `page_click`, `page_click_xy` (vision-driven coordinate click, optional double-click), `page_type`, `page_paste` (clipboard write + Cmd/Ctrl+V — reliable bulk grid fill for Excel/Sheets), `page_focus` (loud focus reset for SPAs that grab focus), `page_focus_state` (inspect current focus), `page_hover`, `page_press_key`, `page_scroll` (js or real-wheel mode for virtualized grids), `page_fill_form`, `page_select`, `page_upload_file`, `page_drag`, `page_handle_dialog`. `page_click`/`page_type` auto-wait for the target to be actionable (visible/stable/enabled) — pass `force: true` to skip.
+- **Wait:** `page_wait` (uid/selector/function/response/loadstate — the antidote to racing async SPAs; response mode is observational and doesn't claim the tab), `page_wait_for_download` (observe the user's real download completing — never redirects, never enumerates history)
 - **Batch:** `page_batch` — run several tools sequentially in one MCP round-trip (click → type → screenshot, fill multi-step forms, write a whole grid row). Aborts on first error by default; pass `stopOnError: false` to collect per-step errors.
 - **Network / JS:** `page_fetch`, `page_eval_js`, `console_read`, `network_read`
 - **Multi-profile:** `chromanche_list_profiles` + optional `profile` field on every tool

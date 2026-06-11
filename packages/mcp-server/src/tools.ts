@@ -10,6 +10,9 @@ import {
   PageClickParamsSchema,
   PageTypeParamsSchema,
   PageScrollParamsSchema,
+  PagePasteParamsSchema,
+  PageWaitParamsSchema,
+  PageWaitForDownloadParamsSchema,
   PageHoverParamsSchema,
   PageFocusParamsSchema,
   PageClickXyParamsSchema,
@@ -47,9 +50,10 @@ interface Tool<P> {
 export const BATCHABLE_TOOLS = [
   "tabs_list", "tabs_create", "tabs_close", "tabs_activate",
   "page_navigate", "page_snapshot", "page_screenshot",
-  "page_click", "page_click_xy", "page_type", "page_scroll",
+  "page_click", "page_click_xy", "page_type", "page_paste", "page_scroll",
   "page_hover", "page_focus", "page_press_key", "page_focus_state", "page_fill_form",
   "page_handle_dialog", "page_select", "page_upload_file", "page_drag",
+  "page_wait",
   "page_fetch", "page_eval_js",
   "console_read", "network_read",
   "session_release",
@@ -313,7 +317,7 @@ export function buildTools(bridge: BridgeServer) {
 
   const page_scroll: Tool<z.infer<ReturnType<typeof withProfile<typeof PageScrollParamsSchema>>>> = {
     description:
-      "Scroll a tab by (dx, dy) pixels, to an element matching a CSS selector, or to 'top'/'bottom'. Provide exactly one target. Set includeSnapshot=true to get an updated accessibility tree.",
+      "Scroll a tab by (dx, dy) pixels, to an element matching a CSS selector, or to 'top'/'bottom'. Provide exactly one target in js mode. Set mode='wheel' to dispatch a REAL mouse-wheel event (needs dx/dy, optionally anchored at a uid/selector centre) — use this for virtualized grids like Excel for the Web that lazy-load rows on wheel scroll. Set includeSnapshot=true to get an updated accessibility tree.",
     inputSchema: withProfile(PageScrollParamsSchema),
     handler: async (params) => {
       guard(bridge);
@@ -321,6 +325,54 @@ export function buildTools(bridge: BridgeServer) {
       const parsed = PageScrollParamsSchema.parse(p);
       await ensureClaim(parsed.tabId, profile);
       return text(await bridge.call("page.scroll", parsed, profile));
+    },
+  };
+
+  const page_paste: Tool<z.infer<ReturnType<typeof withProfile<typeof PagePasteParamsSchema>>>> = {
+    description:
+      "Paste text into the page (clipboard write + Cmd/Ctrl+V). The reliable primitive for bulk grid fill — Excel for the Web and Google Sheets parse pasted TSV deterministically (Tab → next cell, newline → next row). No keystroke timing races, no per-cell anchors. " +
+      "Modes: target=\"current\" (default) pastes at whatever has document focus; target=\"uid\" resolves the uid (preferred), auto-focuses, then pastes; target=\"xy\" coordinate-clicks at (x, y) first to set focus, then pastes. " +
+      "Caveat: this overwrites the user's clipboard (not restored). Prefer page_paste over multi-step page_type for any grid fill larger than ~10 cells.",
+    inputSchema: withProfile(PagePasteParamsSchema),
+    handler: async (params) => {
+      guard(bridge);
+      const { profile, params: p } = splitProfile(params as Record<string, unknown>);
+      const parsed = PagePasteParamsSchema.parse(p);
+      await ensureClaim(parsed.tabId, profile);
+      return text(await bridge.call("page.paste", parsed, profile));
+    },
+  };
+
+  const page_wait: Tool<z.infer<ReturnType<typeof withProfile<typeof PageWaitParamsSchema>>>> = {
+    description:
+      "Wait for a condition before continuing — the antidote to racing heavy async SPAs (Power Automate's lazy canvas, Office365 chrome). Modes (`for`): " +
+      "\"uid\" (preferred) waits for a uid from the last snapshot to reach `state` (visible/hidden/attached/detached); OOPIF-aware. " +
+      "\"selector\" same, but main-frame only (fallback). " +
+      "\"function\" waits for a JS `expression` to evaluate truthy. " +
+      "\"response\" waits for a request whose URL matches `urlPattern` to appear in the network buffer AFTER this call is armed (observational — does NOT claim the tab). " +
+      "\"loadstate\" waits for load/domcontentloaded/networkidle. Throws on timeout (default 10s).",
+    inputSchema: withProfile(PageWaitParamsSchema),
+    handler: async (params) => {
+      guard(bridge);
+      const { profile, params: p } = splitProfile(params as Record<string, unknown>);
+      const parsed = PageWaitParamsSchema.parse(p);
+      // Claim discipline: response mode is purely observational — don't pull a
+      // tab into the Agent group for it. The other modes act on a page we drive.
+      if (parsed.for !== "response") await ensureClaim(parsed.tabId, profile);
+      return text(await bridge.call("page.wait", parsed, profile));
+    },
+  };
+
+  const page_wait_for_download: Tool<z.infer<ReturnType<typeof withProfile<typeof PageWaitForDownloadParamsSchema>>>> = {
+    description:
+      "Wait for a file download to COMPLETE and return its metadata (filename, the on-disk path Chrome chose, bytes, mime). Observational: fire the export/download click yourself first, then call this. The file lands in the user's normal download folder — Chromanche never redirects downloads and never enumerates the user's history; it only reports downloads that start after this wait is armed. Optional filenamePattern (regex) narrows which download to match.",
+    inputSchema: withProfile(PageWaitForDownloadParamsSchema),
+    handler: async (params) => {
+      guard(bridge);
+      const { profile, params: p } = splitProfile(params as Record<string, unknown>);
+      const parsed = PageWaitForDownloadParamsSchema.parse(p);
+      // Observational — no claim (the preceding export click already claimed).
+      return text(await bridge.call("page.waitForDownload", parsed, profile));
     },
   };
 
@@ -507,6 +559,7 @@ export function buildTools(bridge: BridgeServer) {
     page_click: page_click.handler,
     page_click_xy: page_click_xy.handler,
     page_type: page_type.handler,
+    page_paste: page_paste.handler,
     page_scroll: page_scroll.handler,
     page_hover: page_hover.handler,
     page_focus: page_focus.handler,
@@ -517,6 +570,7 @@ export function buildTools(bridge: BridgeServer) {
     page_select: page_select.handler,
     page_upload_file: page_upload_file.handler,
     page_drag: page_drag.handler,
+    page_wait: page_wait.handler,
     page_fetch: page_fetch.handler,
     page_eval_js: page_eval_js.handler,
     console_read: console_read.handler,
@@ -592,9 +646,10 @@ export function buildTools(bridge: BridgeServer) {
     chromanche_list_profiles,
     tabs_list, tabs_create, tabs_close, tabs_activate,
     page_navigate, page_snapshot, page_screenshot,
-    page_click, page_click_xy, page_type, page_scroll,
+    page_click, page_click_xy, page_type, page_paste, page_scroll,
     page_hover, page_focus, page_press_key, page_focus_state, page_fill_form,
     page_handle_dialog, page_select, page_upload_file, page_drag,
+    page_wait, page_wait_for_download,
     session_release,
     page_fetch, page_eval_js, console_read, network_read,
     page_batch,

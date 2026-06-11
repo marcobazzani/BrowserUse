@@ -124,4 +124,51 @@ describeE2E("end-to-end: extension in real Chromium ↔ real MCP server", () => 
     );
     expect(hasOverlay).toBe(true);
   }, 30_000);
+
+  it("page_wait (selector) resolves once a delayed element appears", async () => {
+    const page = await ctx.newPage();
+    await page.goto("about:blank");
+    const tabId = await sw.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return tabs[0]!.id!;
+    });
+    // Inject an element after 800ms.
+    await page.evaluate(() => {
+      setTimeout(() => {
+        const d = document.createElement("div");
+        d.id = "late";
+        d.textContent = "ready";
+        document.body.appendChild(d);
+      }, 800);
+    });
+    const result = await mcpClient.callTool({
+      name: "page_wait",
+      arguments: { tabId, for: "selector", selector: "#late", timeoutMs: 5000 },
+    });
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.matched).toBe(true);
+  }, 20_000);
+
+  it("page_wait (selector) times out for a selector that never appears", async () => {
+    const page = await ctx.newPage();
+    await page.goto("about:blank");
+    const tabId = await sw.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return tabs[0]!.id!;
+    });
+    // The MCP SDK rejects callTool when the tool throws — assert the timeout surfaces.
+    await expect(
+      mcpClient.callTool({
+        name: "page_wait",
+        arguments: { tabId, for: "selector", selector: "#never-ever", timeoutMs: 600 },
+      }),
+    ).rejects.toThrow(/timed out/i);
+  }, 20_000);
+
+  it("downloads permission is granted (manifest change is live)", async () => {
+    // Asserts the new "downloads" manifest permission actually wires the API
+    // into the service worker — guards the manifest change per CLAUDE.md.
+    const hasDownloads = await sw.evaluate(() => typeof chrome.downloads?.onCreated?.addListener === "function");
+    expect(hasDownloads).toBe(true);
+  }, 20_000);
 });
